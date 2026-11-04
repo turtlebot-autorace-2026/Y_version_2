@@ -55,7 +55,7 @@ DEFAULTS = {
     'robot_x': 326.0,              # BEV x of the robot centre line [px]
     'camera_height': 0.129,        # m, sets the BEV metric scale
     'camera_ahead_of_axle': 0.076,  # m
-    'lane_width_px': 320.0,        # initial line-centre spacing [BEV px]; learned online
+    'lane_width_px': 355.0,        # initial line-centre spacing [BEV px] = 286 mm (measured, senior's value); learned online
     'learn_lane_width': True,
     'lane_width_alpha': 0.05,
     'line_width': 0.026,           # m, painted line width

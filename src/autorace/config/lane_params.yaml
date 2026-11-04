@@ -19,7 +19,7 @@ lane_detection_ad:
     robot_x: 326.0
     camera_height: 0.129
     camera_ahead_of_axle: 0.076
-    lane_width_px: 320.0
+    lane_width_px: 355.0          # = 286 mm line-centre spacing (measured; senior's value). 320 was 258 mm -> false slow-downs
     learn_lane_width: true
     lane_width_alpha: 0.05
     line_width: 0.026
@@ -35,7 +35,7 @@ lane_detection_ad:
     hold_time: 1.0
     control_length: 0.12
     latency: 0.15
-    v_max: 0.12
+    v_max: 0.18                   # straights (senior: 0.18); bends are limited by a_lat_max
     v_max_intersection: 0.08
     v_min: 0.03
     a_lat_max: 0.03

@@ -48,7 +48,7 @@ ros2 launch autorace robot.launch.py
 | 인자 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `start_mode` | `light` | `go` = 신호등 안 보고 바로 출발 |
-| `v_max` | `0.08` | 차선 속도 m/s |
+| `v_max` | `0.18` | 직선 속도 m/s (커브는 알아서 감속) |
 | `bringup` / `cameras` | `auto` | auto = 로봇일 때만 켬 (`true`/`false`로 강제) |
 | `python` | 자동 | YOLO 노드용 파이썬 |
 | `device` | `''` | YOLO 장치 (`cpu`, `0`) |
@@ -64,7 +64,7 @@ ros2 launch autorace sim.launch.py
 
 hakee의 `autorace_gazebo`가 설치(source)돼 있으면 Gazebo까지 같이 뜬다. Gazebo를 따로 켰으면 `gazebo:=false`.
 - 카메라 변환: `/camera/image_raw` → `/camera`, `/front_camera/image_raw` → `/camera2`
-- 스폰 위치: `x:= y:= yaw:=`, 창 없이 돌리려면 `gui:=false`, 속도는 `v_max` (기본 0.12)
+- 스폰 위치: `x:= y:= yaw:=`, 창 없이 돌리려면 `gui:=false`, 속도는 `v_max` (기본 0.18)
 - Gazebo 로봇에 앞 카메라가 없으면 표지판도 신호등도 안 보인다. 이때는 5초 뒤 신호등 없이 출발하고, 미션은 시작되지 않는다(차선 주행만 함).
 
 ## 보는 법

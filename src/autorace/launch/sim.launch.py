@@ -85,7 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument('y', default_value='-1.999'),
         DeclareLaunchArgument('yaw', default_value='0.0'),
         DeclareLaunchArgument('start_mode', default_value='light', description='light | go'),
-        DeclareLaunchArgument('v_max', default_value='0.12'),
+        DeclareLaunchArgument('v_max', default_value='0.18'),
         DeclareLaunchArgument('python', default_value='', description='python with ultralytics for the YOLO nodes'),
         DeclareLaunchArgument('device', default_value=''),
         DeclareLaunchArgument('show', default_value='true'),

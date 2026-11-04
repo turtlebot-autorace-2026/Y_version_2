@@ -103,7 +103,7 @@ def generate_launch_description():
         DeclareLaunchArgument('bringup', default_value='auto', description='turtlebot3_bringup: auto | true | false'),
         DeclareLaunchArgument('cameras', default_value='auto', description='camera_ros publishers: auto | true | false'),
         DeclareLaunchArgument('start_mode', default_value='light', description='light = wait for green | go'),
-        DeclareLaunchArgument('v_max', default_value='0.08', description='lane speed m/s'),
+        DeclareLaunchArgument('v_max', default_value='0.18', description='lane speed on straights m/s (bends slow down by themselves)'),
         DeclareLaunchArgument('python', default_value='', description='python with ultralytics for the YOLO nodes'),
         DeclareLaunchArgument('device', default_value='', description="YOLO device: '' auto, 'cpu', '0'"),
         DeclareLaunchArgument('show', default_value='false', description='cv2 windows (need a display)'),
