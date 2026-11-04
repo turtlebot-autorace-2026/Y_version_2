@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>autorace</name>
+  <version>1.0.0</version>
+  <description>TurtleBot3 AutoRace 2026 in one package: senior's camera_ros and YOLO models (lane_detection_dl),
+    lane_detection_ad lane following, missions_v1 mission FSM and cmd_vel mux.</description>
+  <maintainer email="eureka01020304@gmail.com">turtlebot-autorace-2026</maintainer>
+  <license>TODO</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- pip: ultralytics (both YOLO models). Optional at run time: turtlebot3_bringup (robot.launch.py),
+       autorace_gazebo (sim.launch.py) -->
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

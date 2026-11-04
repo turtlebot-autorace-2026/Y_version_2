@@ -1,0 +1,121 @@
+# autorace_mission parameters. Doubles MUST keep a decimal point (ROS 2 rejects 1 for a double).
+# Distances in metres are from the Gazebo world (autorace_gazebo v014, 260/227 scale) unless noted.
+mission_fsm:
+  ros__parameters:
+    # inputs
+    sign_topics: [/parking, /left, /right, /no_entry, /stop, /construction, /intersection, /tunnel]   # mission_model order
+    odom_topic: /odom
+    scan_topic: /scan
+    image_topic: /camera2          # front camera (traffic light, barrier)
+    lidar_x: -0.032                # LiDAR position ahead of base_link
+    rate_hz: 10.0
+    status_period: 1.0
+    publish_debug: true            # /mission/debug/compressed while a camera check runs
+
+    start_mode: light              # light = wait for green | go = drive at once
+    missions: [intersection, construction, parking, level_crossing]   # tunnel off for now: add 'tunnel' to enable
+    pending_m: 1.0                 # a sign seen during another mission still starts its mission within this
+
+    traffic_light:
+      need_red_first: true         # accept green only after a red (guards a static false green)
+      green_frames: 2
+      fallback_s: 0.0              # >0: go this long after the last red/yellow even without green
+      no_camera_go_s: 0.0          # >0: go if no front-camera frame arrived this long (sim.launch sets 5.0)
+
+    intersection:                  # /intersection (triangle) arms, then /left or /right
+      arm_timeout_m: 4.0
+      left_line: yellow            # left branch outer line (course texture)
+      right_line: white
+      hold_m: 1.0                  # after the last sighting of the chosen sign (signs stand at the fork)
+      timeout_s: 30.0
+
+    construction:                  # follow the line of the current corridor, odometry lane change between
+      start_line: white            # Gazebo: box 1 sits at the inner (yellow) corner -> enter on white
+      spacing: 0.285               # corridor centre to centre
+      corridor_half: 0.12
+      sweep_from: 0.08
+      sweep_ahead: 0.30
+      look_ahead: 0.55
+      beside_back: 0.10            # rear overhang behind the axle
+      min_points: 3
+      aligned_deg: 25.0
+      change_v: 0.05
+      change_lookahead: 0.12
+      change_done_m: 0.025
+      change_done_deg: 10.0
+      change_max_m: 0.7
+      done_clear_m: 0.6
+      max_m: 5.0
+
+    parking:                       # spur on the left -> lot of 3 columns (stall | corridor | stall)
+      spur_turn_deg: 80.0
+      spur_angle_deg: 90.0
+      spur_lane_m: 0.45
+      lot_drive_m: 0.49
+      occupied_range: 0.45
+      default_side: left           # Gazebo has no house robot: both stalls free
+      bay_drive_m: 0.285
+      park_wait_s: 1.5
+      scan_wait_s: 0.6
+      exit_turn_deg: 60.0
+      exit_lane_m: 0.25
+      v: 0.06
+      arm_max_m: 2.5
+
+    level_crossing:                # /stop arms; stop when the bar is down, go when it is up
+      down_frames: 2
+      up_frames: 5
+      use_lidar: true
+      lidar_x: 0.35
+      lidar_half_width: 0.10
+      lidar_points: 3
+      approach_max_m: 2.0
+      max_wait_s: 25.0             # the run ends after 30 s without motion
+      go_m: 0.35
+
+    tunnel:                        # lane until the lines are gone, then right-hand wall following
+      lost_updates: 3
+      enter_max_m: 0.5
+      wall_both: 0.35
+      good_updates: 4
+      min_wall_m: 1.0
+      max_s: 120.0
+      exit_m: 0.15
+      wall_side: right
+      wall_d_wall: 0.20
+      wall_v: 0.08
+      wall_k_d: 4.0
+      wall_k_a: 1.5
+      wall_front_slow: 0.40
+      wall_front_turn: 0.30
+      wall_front_stop: 0.16
+      wall_w_turn: 0.9
+      wall_w_seek: 0.45
+      wall_gap_straight_m: 0.30
+      wall_w_max: 1.0
+
+    light:                         # traffic light colour rule (ROI = image fractions x0 y0 x1 y1)
+      roi: [0.35, 0.0, 1.0, 0.75]
+      v_min: 170
+      s_min: 120
+      min_area: 0.0004
+      max_area: 0.03
+      min_fill: 0.45
+      max_aspect: 2.5
+
+    bar:                           # barrier rule: red spans >= min_width of the image = lowered
+      roi: [0.0, 0.15, 1.0, 0.85]
+      v_min: 70
+      s_min: 110
+      min_width: 0.35
+      min_px: 0.004
+
+cmd_vel_mux:
+  ros__parameters:
+    lane_topic: /cmd_vel_lane
+    mission_topic: /cmd_vel_mission
+    mode_topic: /mission/drive
+    out_topic: cmd_vel
+    source_timeout: 0.5
+    mode_timeout: 1.0
+    tick_hz: 20.0
