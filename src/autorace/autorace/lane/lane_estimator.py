@@ -20,7 +20,8 @@ Per frame:
          w = v * (kappa + e_y / L^2 + 2 e_th / L)   (critically damped in distance, L = control_length)
        far (preview up to ~0.55 m): curvature / kink -> slow down BEFORE the bend
        steering saturates -> slow down instead of running wide (kinks become slow pivot turns)
-  6. lost lane: memory hold -> stop -> rotate-search toward the last known side (30 s rule)
+  6. lost lane: memory hold -> creep straight ahead at lost_v (no turning in place: fall risk;
+     rotate-search only if search_enabled)
 '''
 import math
 
@@ -91,7 +92,10 @@ DEFAULTS = {
     'max_ang': 1.2,                # rad/s
     'max_ang_acc': 6.0,            # rad/s^2
     'max_lin_acc': 0.3,            # m/s^2
-    'search_after': 1.0,           # s stopped before rotate-search
+    'lost_v': 0.02,                # m/s straight ahead while the line is lost (0 = stop and wait)
+    'search_enabled': False,       # rotate in place to look for the line after a loss. Off: turning in place
+                                   # near the road edge can drop a wheel off the track
+    'search_after': 1.0,           # s stopped before rotate-search (only with search_enabled)
     'search_ang': 0.4,             # rad/s
     # lateral offset of the followed path (mission FSM, e.g. construction avoidance)
     'offset_slope': 1.0,           # max offset change per m driven (1.0 = 45 deg approach)
@@ -513,10 +517,10 @@ class LaneEstimator:
         if out is None:
             if self.lost_since is None:
                 self.lost_since = t
-            if t - self.lost_since < cfg.search_after:
-                v, w, mode = 0.0, 0.0, 'lost'
-            else:
+            if cfg.search_enabled and t - self.lost_since >= cfg.search_after:
                 v, w, mode = 0.0, cfg.search_ang * self.last_side, 'search'
+            else:                               # creep straight on, slowly, until a line is seen again
+                v, w, mode = float(cfg.lost_v), 0.0, 'lost'
         else:
             self.lost_since = None
             v, w, mode = out

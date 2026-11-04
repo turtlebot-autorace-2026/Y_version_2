@@ -186,7 +186,7 @@ def test_centre_reported_in_robot_frame():
         assert abs(cth + pose[2]) < math.radians(3), (pose, math.degrees(cth))
 
 
-def test_lost_memory_then_search():
+def test_lost_memory_then_creep():
     cfg, c = LaneConfig(), straight()
     est = LaneEstimator(cfg)
     t, pose = 0.0, [0.0, 0.0, 0.0]
@@ -197,9 +197,13 @@ def test_lost_memory_then_search():
     assert est.debug['mode'] == 'memory' and v > 0
     pose[0] += cfg.hold_distance + 0.05                 # drove too far on memory
     t += 0.07
-    est.update([], tuple(pose), t)
-    assert est.debug['mode'] == 'lost'
-    t += cfg.search_after + 0.1
+    v, w = est.update([], tuple(pose), t)
+    assert est.debug['mode'] == 'lost' and v == cfg.lost_v and w == 0.0     # creeps straight
+    t += cfg.search_after + 5.0
+    v, w = est.update([], tuple(pose), t)                # still creeping, never turning in place
+    assert est.debug['mode'] == 'lost' and v == cfg.lost_v and w == 0.0
+    est.cfg.search_enabled = True                       # optional rotate-search still works
+    t += 0.1
     v, w = est.update([], tuple(pose), t)
     assert est.debug['mode'] == 'search' and v == 0.0 and w != 0.0
 

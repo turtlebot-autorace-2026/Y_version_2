@@ -52,5 +52,7 @@ lane_detection_ad:
     max_ang: 1.2
     max_ang_acc: 6.0
     max_lin_acc: 0.3
+    lost_v: 0.02                  # m/s straight ahead while the line is lost (0.0 = stop)
+    search_enabled: false         # no rotate-in-place search when the line is lost (fall risk)
     search_after: 1.0
     search_ang: 0.4

@@ -10,7 +10,7 @@
 | `missions_v1` | `7f8ce90` | 미션 FSM + cmd_vel mux → `autorace/mission` |
 
 바꾼 건 import 경로, 모델·설정 파일 위치(`share/autorace/...`)뿐이고 동작은 원본과 같다. 아래 두 가지만 새로 넣었다.
-- **터널 미션은 기본으로 꺼 둠** (`config/mission_params.yaml`의 `missions`에 `tunnel`을 넣으면 켜짐). 터널에서는 차선을 잃어서 차선 노드가 멈췄다가 제자리 탐색을 한다.
+- **터널 미션은 기본으로 꺼 둠** (`config/mission_params.yaml`의 `missions`에 `tunnel`을 넣으면 켜짐). 터널에서는 차선을 잃어서 차선 노드가 아주 천천히(0.02 m/s) 직진만 한다.
 - 미션 중에 다른 표지판이 떠서 대기열이 만료돼도, 그 표지판이 아직 보이고 있으면 앞 미션이 끝난 뒤 시작한다.
 
 ## 설치 (처음 한 번)
