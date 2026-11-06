@@ -31,7 +31,8 @@ from autorace.mission import vision
 from autorace.mission.fsm_core import CLASSES, DEFAULTS, MissionFSM
 from autorace.mission.lidar import Scan
 from autorace.mission.missions import Ctx, Tunnel
-from autorace.mission.motion import WALL_DEFAULTS
+from autorace.mission.gridnav import GRID_DEFAULTS
+from autorace.mission.motion import GAP_DEFAULTS, WALL_DEFAULTS
 from autorace.mission.signs import SIGN_TOPICS, SIGNS, SignBoard
 
 
@@ -59,6 +60,8 @@ class MissionFsmNode(Node):
             d = dict(cls.DEFAULTS)
             if cls is Tunnel:
                 d.update(('wall_' + k, v) for k, v in WALL_DEFAULTS.items())
+                d.update(('gap_' + k, v) for k, v in GAP_DEFAULTS.items())
+                d.update(('grid_' + k, v) for k, v in GRID_DEFAULTS.items())
             for k, v in d.items():
                 p('%s.%s' % (name, k), v)
             mission_params[name] = dict((k, g('%s.%s' % (name, k))) for k in d)

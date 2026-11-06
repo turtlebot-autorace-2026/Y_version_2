@@ -9,9 +9,11 @@
 | `lane_detection_ad` | `fd83702` | 차선 노드 → `autorace/lane` |
 | `missions_v1` | `7f8ce90` | 미션 FSM + cmd_vel mux → `autorace/mission` |
 
-바꾼 건 import 경로, 모델·설정 파일 위치(`share/autorace/...`)뿐이고 동작은 원본과 같다. 아래 두 가지만 새로 넣었다.
-- **터널 미션은 기본으로 꺼 둠** (`config/mission_params.yaml`의 `missions`에 `tunnel`을 넣으면 켜짐). 터널에서는 차선을 잃어서 차선 노드가 아주 천천히(0.02 m/s) 직진만 한다.
+처음 합칠 때 바꾼 건 import 경로, 모델·설정 파일 위치(`share/autorace/...`)뿐이었다. 그 뒤 이 repo에서 바꾼 것:
 - 미션 중에 다른 표지판이 떠서 대기열이 만료돼도, 그 표지판이 아직 보이고 있으면 앞 미션이 끝난 뒤 시작한다.
+- 카메라를 번호 대신 고정 장치 이름으로 연다 (아래 "카메라 두 대 지정").
+- 교차로 출구를 헤딩으로 판정한다 (아래 "교차로 미션이 하는 일").
+- 터널: LiDAR로 지도를 쌓으며 출구까지 경로 계획, 기본으로 켜짐 (아래 "터널 미션이 하는 일").
 
 ## 설치 (처음 한 번)
 
@@ -40,7 +42,7 @@ ros2 launch autorace robot.launch.py
 | camera_publisher / camera_publisher2 | `/camera` 차선 카메라(보정), `/camera2` 앞 카메라 — 장치는 `config/camera_params.yaml` |
 | sign_detection (YOLO11n) | `/parking` `/left` `/right` `/stop` `/construction` `/intersection` `/tunnel` |
 | lane_detection (YOLO26n-seg) | 차선 주행 명령 → `/cmd_vel_lane` |
-| mission_fsm | 신호등 → 표지판에 따라 교차로 · 공사 · 주차 · 차단바 |
+| mission_fsm | 신호등 → 표지판에 따라 교차로 · 공사 · 주차 · 차단바 · 터널 |
 | cmd_vel_mux | 선택된 쪽 명령만 `/cmd_vel`로 (끊기면 정지) |
 
 시작하면 빨간불을 본 뒤 초록불에 출발한다.
@@ -93,6 +95,24 @@ hakee의 `autorace_gazebo`가 설치(source)돼 있으면 Gazebo까지 같이 �
 
 `ros2 topic echo /mission/state`에 `intersection/branch left u=.. peak=..`처럼 단계(`armed` → `branch` → `far_side` → `exit`)와 회전 각도가 나온다.
 
+## 터널 미션이 하는 일
+
+안은 어둡고 장애물은 무작위라 카메라 없이 LiDAR와 오도메트리만 쓴다. 2025년 팀 코드(`tunnel.zip`)는 미리 만든 지도와 Nav2로 출구 좌표(시작점에서 앞 1.42 m, 왼쪽 1.86 m, +93°)까지 갔다. 그 지도와 Nav2 설정은 없어서, 지도를 미리 만들지 않고 터널 안에서 쌓는다.
+
+1. `/tunnel` 표지판 → 차선 주행. 차선이 끊기면 헤딩을 유지하고 직진하다가, 양옆 0.35 m 안에 벽이 잡히는 곳(입구)에서 터널 좌표계를 잡는다.
+2. 스캔마다 LiDAR 점을 3 cm 격자에 쌓는다 (모르는 칸은 빈 칸으로 봄).
+3. 1초마다(그리고 새로 본 장애물이 경로를 막으면 바로) 격자 위에서 출구 바깥 목표까지 경로를 다시 계획한다. 장애물에서 0.11 m 안으로는 못 가고 0.25 m까지는 비용을 더 매겨 떨어져 간다.
+4. 경로 0.25 m 앞 점을 향해 가되, 지금 스캔에서 그 방향이 막혀 있으면 가장 가까운 열린 방향으로 간다.
+5. 출구 개구부 안에 들어와서 차선이 다시 보이면 차선 주행으로 넘긴다. 10초 동안 경로상 진척이 없으면 오른쪽 벽따라가기 0.6 m 후 다시 계획한다. 120초가 넘으면 그냥 차선으로 넘긴다.
+
+**대회 터널에서 꼭 잴 것** (`mission_params.yaml`, 지금 값은 Gazebo 맵):
+- `exit_fwd` = 입구 벽 **바깥면**에서 출구 차선 중심까지 진행 방향으로 잰 거리 **+ 약 0.1 m**. 좌표 원점이 양옆 벽이 0.35 m 안에 처음 잡히는 곳, 즉 바깥면보다 약 0.1 m 앞(입구 폭에 따라 0.09~0.11)이라서다. Gazebo는 1.90 + 0.11 = 2.01.
+- `exit_left` = 들어오는 차선 중심선에서 출구가 뚫린 벽 안쪽 면까지 옆으로 잰 거리. 출구가 오른쪽이면 음수. Gazebo는 1.95.
+
+0.2 m 정도 틀려도 격자가 개구부를 직접 찾는다(테스트 있음). 크게 틀리면 경로가 엉뚱한 벽으로 향한다.
+
+`/mission/state`에 `tunnel/goal ... plans=N`과 지금 고른 방향, 남은 여유 거리가 나온다.
+
 ## 보는 법
 
 ```bash
@@ -104,11 +124,11 @@ ros2 run rqt_image_view rqt_image_view /lane_detection/debug/compressed  # 차�
 
 ## 검증한 것 / 안 한 것
 
-- pytest 48개 통과 (`cd src/autorace && python3 -m pytest -q test`)
+- pytest 53개 통과 (`cd src/autorace && python3 -m pytest -q test`)
   - 차선 추정 8개
   - 미션 FSM과 mux (교차로: 섬을 돌아 출구까지 헤딩 흐름, 접근로 굽음·흔들림, max_m)
   - 카메라 장치 이름 해석 (가짜 /dev 트리)
-  - 맵 기하로 돌린 2D 시뮬: 공사, 주차, 터널
+  - 맵 기하로 돌린 2D 시뮬: 공사, 주차, 터널 (Gazebo 터널 + 규정 1.8 m 터널, 장애물 주머니 배치 4개, 출구 좌표 ±0.2 m 오차)
   - 색 규칙
 - launch 파일 2개는 ROS 2 Galactic의 실제 `launch` / `launch_ros` 코드로 펼쳐서 각 노드의 실행 명령과 파라미터를 확인했다.
   - venv 파이썬 prefix

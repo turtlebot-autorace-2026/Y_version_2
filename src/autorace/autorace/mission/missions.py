@@ -13,7 +13,8 @@ Default distances are from the Gazebo world (autorace_gazebo v014, 260/227 scale
 '''
 import math
 
-from autorace.mission.motion import WallFollower, drive_cmd, line_pursuit, turn_cmd, wrap
+from autorace.mission.gridnav import GRID_DEFAULTS, INF, GridNav
+from autorace.mission.motion import GAP_DEFAULTS, GapPlanner, WallFollower, drive_cmd, line_pursuit, turn_cmd, wrap
 
 GOOD_LANE = ('both', 'yellow_only', 'white_only')
 
@@ -503,59 +504,200 @@ class LevelCrossing(Mission):
 # ------------------------------------------------------------------------------- tunnel
 
 class Tunnel(Mission):
-    '''Started by /tunnel. Lane until the lines are gone (or walls on both sides), then LiDAR wall
-    following with obstacle avoidance, until the lane node sees lines again.
-    Gazebo map: entrance top-left, exit bottom-right of a 2.2 x 2.1 m box; right-hand wall following
-    goes down the left wall and along the bottom wall to the exit, 0.44 m or more from the 3 cylinders.'''
+    '''Started by /tunnel. Dark inside, random obstacles: LiDAR + odometry only, driving to the exit.
+
+      enter     lane until the lines are gone, walls are on both sides, or enter_max_m after the sign
+      approach  straight on with the heading held until walls are on both sides (= the entrance) or
+                approach_max_m. That pose is the tunnel frame: x along the entry heading, y to the left.
+      goal      LiDAR builds a small occupancy grid of the tunnel while driving (gridnav.GridNav); a path
+                to the target outside the exit is planned on it every replan_s (and when something new
+                blocks it). The point lookahead m down that path is handed to the gap planner, which only
+                keeps the robot off what the LiDAR sees right now.
+      escape    no progress along the path for stall_s: right-hand wall following for escape_m, re-plan
+      exit      lane lines again (once inside the exit), or the outside target reached -> lane, exit_m, done
+
+    Exit position (exit_fwd, exit_left) in the tunnel frame, which starts where walls first show on both
+    sides (Gazebo v014: 0.16 m before the inner face of the entrance wall): Gazebo exit lane centre
+    2.01 m ahead, exit opening 1.95 m left. The 2025 team's Nav2 goal (their tunnel.zip) was 1.42 m ahead
+    and 1.86 m left of their start somewhere inside the entrance, heading +93 deg: same arrangement
+    (exit on the left, leaving at +90). Measure the real tunnel and set both; a plan only needs the
+    opening within about +-0.25 m, the grid finds the opening itself.
+
+    Why a grid and not a reactive rule: wall following has no target and circles a large obstacle away
+    from the walls; steering at each tick toward the target walks into pockets that face the target.
+    2D sim, random passable layouts: see test_sim.py.'''
     name = 'tunnel'
     DEFAULTS = {
-        'lost_updates': 3,          # lane status not good this many messages -> walls
+        'lost_updates': 3,          # lane status not good this many messages -> approach
         'enter_max_m': 0.5,         # or this far after the sign
-        'wall_both': 0.35,          # walls on both sides closer than this -> walls
-        'good_updates': 4,          # lane good this many messages -> exit
-        'min_wall_m': 1.0,          # wall following at least this far
+        'wall_both': 0.35,          # walls on both sides closer than this = in the entrance
+        'approach_max_m': 0.6,      # straight on at most this far looking for the entrance
+        'approach_v': 0.06,
+        'exit_fwd': 2.01,           # m ahead of the tunnel frame origin to the exit lane centre
+        'exit_left': 1.95,          # m left of the entry line to the exit opening (negative = right)
+        'inside_m': 0.30,           # "inside the exit" from this far before the opening
+        'outside_m': 0.40,          # target this far beyond the opening
+        'reach_m': 0.15,            # target reached within this
+        'replan_s': 1.0,
+        'lookahead': 0.25,          # m down the planned path handed to the gap planner
+        'stall_s': 10.0,            # no progress along the path this long -> escape
+        'stall_progress': 0.05,     # m of cost-to-go
+        'escape_m': 0.6,            # wall following this far, then plan again
+        'good_updates': 4,          # lane good this many messages (inside the exit) -> exit
         'max_s': 120.0,
         'exit_m': 0.15,
     }
     WALL_KEYS = ('side', 'd_wall', 'v', 'k_d', 'k_a', 'front_slow', 'front_turn', 'front_stop', 'w_turn',
                  'w_seek', 'gap_straight_m', 'w_max')
+    GAP_KEYS = tuple(GAP_DEFAULTS)
+    GRID_KEYS = tuple(GRID_DEFAULTS)
 
     def __init__(self, p=None):
         p = dict(p or {})
-        wall = dict((k[5:], p.pop(k)) for k in list(p) if k.startswith('wall_') and k[5:] in self.WALL_KEYS)
+        def sub(prefix, keys):
+            return dict((k[len(prefix):], p.pop(k)) for k in list(p) if k.startswith(prefix) and k[len(prefix):] in keys)
+        wall, gap, grid = sub('wall_', self.WALL_KEYS), sub('gap_', self.GAP_KEYS), sub('grid_', self.GRID_KEYS)
         Mission.__init__(self, p)
-        self.wall_p = wall
+        self.wall_p, self.gap_p, self.grid_p = wall, gap, grid
 
     def start(self, ctx):
         Mission.start(self, ctx)
         self.follower = WallFollower(self.wall_p)
+        self.planner = GapPlanner(self.gap_p)
         self.bad, self.good = _FrameCounter(), _FrameCounter()
+        self.frame, self.targets, self.k, self.grid = None, [], 0, None
+        self.last_scan, self.escapes, self.plans = None, 0, 0
         self._enter('enter', ctx)
 
+    # ---- tunnel frame -----------------------------------------------------------------
+
+    def _set_frame(self, ctx):
+        p = self.p
+        self.frame = (ctx.x, ctx.y, ctx.yaw)
+        sgn = 1.0 if p['exit_left'] >= 0 else -1.0
+        self.targets = [self._world(p['exit_fwd'], p['exit_left'] - sgn * p['inside_m']),
+                        self._world(p['exit_fwd'], p['exit_left'] + sgn * p['outside_m'])]
+        self.k = 0
+        self.grid = GridNav(self.frame, p['exit_fwd'], abs(p['exit_left']), sgn, self.grid_p)
+        self.log.append('tunnel: frame (%.2f, %.2f, %.0f deg), exit target (%.2f, %.2f)' % (
+            ctx.x, ctx.y, math.degrees(ctx.yaw), self.targets[1][0], self.targets[1][1]))
+
+    def _world(self, fwd, left):
+        x0, y0, th = self.frame
+        return (x0 + fwd * math.cos(th) - left * math.sin(th), y0 + fwd * math.sin(th) + left * math.cos(th))
+
+    def _local(self, ctx):
+        '''Robot position in the tunnel frame: (ahead of the entrance, left of the entry line).'''
+        x0, y0, th = self.frame
+        dx, dy = ctx.x - x0, ctx.y - y0
+        return dx * math.cos(th) + dy * math.sin(th), -dx * math.sin(th) + dy * math.cos(th)
+
+    def _target(self, ctx):
+        tx, ty = self.targets[self.k]
+        dx, dy = tx - ctx.x, ty - ctx.y
+        return math.hypot(dx, dy), wrap(math.atan2(dy, dx) - ctx.yaw)
+
+    def _start_goal(self, ctx):
+        self._enter('goal', ctx)
+        self.plan_t = -1e9
+        self.best, self.best_t = INF, ctx.t
+
+    def _progress(self, ctx):
+        '''m still to go along the planned path (straight distance to the target before the first plan).'''
+        c = self.grid.cost_to_go(ctx.x, ctx.y)
+        return c * self.grid.res if c < INF else self._target(ctx)[0]
+
+    def _map(self, ctx):
+        '''New LiDAR scan into the grid; re-plan every replan_s or when the path is blocked now.'''
+        if ctx.scan is None or ctx.scan is self.last_scan:
+            return
+        self.last_scan = ctx.scan
+        g = self.grid
+        g.add_scan(ctx.scan, (ctx.x, ctx.y, ctx.yaw))
+        if self.phase == 'goal' and (ctx.t - self.plan_t >= self.p['replan_s']
+                                     or g.path_blocked(ctx.x, ctx.y, self.p['lookahead'])):
+            g.plan(self.targets[1])
+            self.plan_t = ctx.t
+            self.plans += 1
+            now = self._progress(ctx)
+            if now > self.best + 0.15:          # the map changed (a new obstacle): fresh chance
+                self.best, self.best_t = now, ctx.t
+
+    def _drive(self, ctx, dist, bearing):
+        g = self.grid
+        nxt = g.next_point(ctx.x, ctx.y, self.p['lookahead'])
+        if nxt is None:                                          # no path on the grid: head for the target
+            return self.planner.step(ctx.scan, bearing, dist)
+        dx, dy = nxt[0] - ctx.x, nxt[1] - ctx.y
+        b = wrap(math.atan2(dy, dx) - ctx.yaw)
+        return self.planner.step(ctx.scan, b, dist, need=max(math.hypot(dx, dy), 0.15))
+
+    # ---- main ---------------------------------------------------------------------------
+
     def step(self, ctx):
+        p = self.p
+        walls = ctx.scan is not None and ctx.scan.sector_min(60, 120) < p['wall_both'] \
+            and ctx.scan.sector_min(-120, -60) < p['wall_both']
         if self.phase == 'enter':
             bad = self.bad.update(ctx.lane_seq, ctx.lane_status not in GOOD_LANE)
-            walls = ctx.scan is not None and ctx.scan.sector_min(60, 120) < self.p['wall_both'] \
-                and ctx.scan.sector_min(-120, -60) < self.p['wall_both']
-            if bad >= self.p['lost_updates'] or walls or self.phase_dist(ctx) >= self.p['enter_max_m']:
-                self._enter('walls', ctx)
+            if walls:
+                self._set_frame(ctx)
+                self._start_goal(ctx)
+            elif bad >= p['lost_updates'] or self.phase_dist(ctx) >= p['enter_max_m']:
+                self._enter('approach', ctx)
             else:
                 return Outputs()
-        if self.phase == 'walls':
-            good = self.good.update(ctx.lane_seq, ctx.lane_status in GOOD_LANE)
-            if (good >= self.p['good_updates'] and self.phase_dist(ctx) >= self.p['min_wall_m']) \
-                    or ctx.t - self.phase_t > self.p['max_s']:
-                self._enter('exit', ctx)
-                return Outputs(reset=True)
-            if ctx.scan is None:
-                return Outputs(drive='mission')
-            return Outputs(drive='mission', cmd=self.follower.step(ctx.scan, ctx.travel))
+        if self.phase == 'approach':
+            ahead = ctx.scan is not None and ctx.scan.sector_min(-25.0, 25.0) < 0.25   # something right ahead
+            if walls or ahead or self.phase_dist(ctx) >= p['approach_max_m']:
+                self._set_frame(ctx)
+                self._start_goal(ctx)
+            else:
+                cmd, _ = drive_cmd(self.phase_dist(ctx), p['approach_max_m'], ctx.yaw, self.phase_yaw,
+                                   p['approach_v'])
+                return Outputs(drive='mission', cmd=cmd)
         if self.phase == 'exit':
-            if self.phase_dist(ctx) >= self.p['exit_m']:
-                self._finish('ok', 'lines again')
+            if self.phase_dist(ctx) >= p['exit_m']:
+                self._finish('ok', 'out (%d plans, %d escapes)' % (self.plans, self.escapes))
             return Outputs()
-        raise RuntimeError('tunnel: phase %s' % self.phase)
+
+        # goal / escape
+        if ctx.t - self.t0 > p['max_s']:
+            self._enter('exit', ctx)
+            self.log.append('tunnel: max_s, handing back to the lane')
+            return Outputs(reset=True)
+        self._map(ctx)
+        fwd, left = self._local(ctx)
+        sgn = 1.0 if p['exit_left'] >= 0 else -1.0
+        if self.k == 0 and sgn * left >= abs(p['exit_left']) - p['inside_m'] and abs(fwd - p['exit_fwd']) < 0.3:
+            self.k = 1                                           # inside the exit opening
+        dist, bearing = self._target(ctx)
+        good = self.good.update(ctx.lane_seq, ctx.lane_status in GOOD_LANE)
+        if self.k == 1 and (good >= p['good_updates'] or self._target(ctx)[0] < p['reach_m']
+                            or sgn * left >= abs(p['exit_left']) + p['outside_m']):
+            self._enter('exit', ctx)
+            return Outputs(reset=True)
+        if ctx.scan is None:
+            return Outputs(drive='mission')
+        if self.phase == 'escape':
+            if self.phase_dist(ctx) >= p['escape_m']:
+                self._start_goal(ctx)
+                self._map(ctx)
+            else:
+                return Outputs(drive='mission', cmd=self.follower.step(ctx.scan, ctx.travel))
+        now = self._progress(ctx)
+        if now < self.best - p['stall_progress']:
+            self.best, self.best_t = now, ctx.t
+        elif ctx.t - self.best_t > p['stall_s']:
+            self.escapes += 1
+            self.follower = WallFollower(self.wall_p)
+            self._enter('escape', ctx)
+            self.log.append('tunnel: no progress for %.0f s, wall following %.1f m' % (p['stall_s'], p['escape_m']))
+            return Outputs(drive='mission', cmd=self.follower.step(ctx.scan, ctx.travel))
+        return Outputs(drive='mission', cmd=self._drive(ctx, dist, bearing))
 
     def status(self):
-        extra = (' ' + self.follower.mode) if self.phase == 'walls' else ''
-        return '%s/%s%s' % (self.name, self.phase, extra)
+        if self.phase in ('goal', 'escape'):
+            mode = self.planner.mode if self.phase == 'goal' else self.follower.mode
+            return '%s/%s%s %s plans=%d' % (self.name, self.phase, ' in-exit' if self.k else '', mode, self.plans)
+        return '%s/%s' % (self.name, self.phase)

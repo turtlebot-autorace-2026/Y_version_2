@@ -25,7 +25,7 @@ CLASSES = {'traffic_light': TrafficLight, 'intersection': Intersection, 'constru
            'parking': Parking, 'level_crossing': LevelCrossing, 'tunnel': Tunnel}
 DEFAULTS = {
     'start_mode': 'light',          # light = wait for green | go = drive immediately
-    'missions': ['intersection', 'construction', 'parking', 'level_crossing'],   # tunnel: add to enable
+    'missions': ['intersection', 'construction', 'parking', 'level_crossing', 'tunnel'],
     'pending_m': 1.0,
     # /left or /right also start the intersection mission. Only for a practice map without the
     # triangle sign: on the course, the parking-area left arrow would start it too. Keep false there.

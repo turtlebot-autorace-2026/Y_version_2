@@ -13,7 +13,7 @@ mission_fsm:
     publish_debug: true            # /mission/debug/compressed while a camera check runs
 
     start_mode: light              # light = wait for green | go = drive at once
-    missions: [intersection, construction, parking, level_crossing]   # tunnel off for now: add 'tunnel' to enable
+    missions: [intersection, construction, parking, level_crossing, tunnel]
     pending_m: 1.0                 # a sign seen during another mission still starts its mission within this
     intersection_on_turn_sign: false   # true: /left /right start the intersection without the triangle
                                        # (practice map only; on the course the parking left arrow would too)
@@ -78,15 +78,35 @@ mission_fsm:
       max_wait_s: 25.0             # the run ends after 30 s without motion
       go_m: 0.35
 
-    tunnel:                        # lane until the lines are gone, then right-hand wall following
+    tunnel:                        # dark: LiDAR grid built while driving + path to the exit (no map file)
       lost_updates: 3
       enter_max_m: 0.5
-      wall_both: 0.35
-      good_updates: 4
-      min_wall_m: 1.0
+      wall_both: 0.35              # walls on both sides closer than this = entrance = tunnel frame origin
+      approach_max_m: 0.6
+      approach_v: 0.06
+      exit_fwd: 2.01               # MEASURE: entrance wall OUTER face -> exit lane centre, along the entry, + 0.11
+      exit_left: 1.95              # MEASURE: entry lane centre line -> inner face of the exit wall (right: negative)
+                                   # (Gazebo v014 values; 2025 team's Nav2 goal: 1.42 ahead / 1.86 left of
+                                   #  their start inside, leaving at +93 deg. +-0.2 m still finds the opening)
+      inside_m: 0.30
+      outside_m: 0.40              # target this far beyond the opening
+      reach_m: 0.15
+      replan_s: 1.0
+      lookahead: 0.25
+      stall_s: 10.0                # no progress along the path this long -> wall following escape_m
+      stall_progress: 0.05
+      escape_m: 0.6
+      good_updates: 4              # lane lines again (inside the exit) -> back to the lane
       max_s: 120.0
       exit_m: 0.15
-      wall_side: right
+      gap_half_width: 0.11         # LiDAR safety corridor half width (robot ~0.10)
+      gap_min_free: 0.25
+      gap_v: 0.08
+      grid_res: 0.03
+      grid_r_hard: 0.11            # path never closer to an obstacle than this
+      grid_r_soft: 0.25            # and prefers to stay this far
+      grid_soft_cost: 3.0
+      wall_side: right             # wall following only for the escape
       wall_d_wall: 0.20
       wall_v: 0.08
       wall_k_d: 4.0

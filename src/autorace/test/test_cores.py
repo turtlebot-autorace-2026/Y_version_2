@@ -228,8 +228,12 @@ def test_sign_during_other_mission_is_pending():
     assert r.fsm.active is not None and r.fsm.active.name == 'construction'
 
 
-def test_tunnel_off_by_default():
+def test_tunnel_on_by_default_and_can_be_left_out():
     r = Run()
+    r.sign('tunnel', True)
+    r.drive(0.1)
+    assert r.fsm.active is not None and r.fsm.active.name == 'tunnel'
+    r = Run(missions=['intersection', 'construction', 'parking', 'level_crossing'])
     r.sign('tunnel', True)
     r.drive(0.5)
     assert r.fsm.state == 'LANE' and not r.fsm.pending

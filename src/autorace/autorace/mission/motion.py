@@ -59,6 +59,74 @@ WALL_DEFAULTS = {
 }
 
 
+GAP_DEFAULTS = {
+    'half_width': 0.11,       # m, corridor half width checked along a direction (robot half width ~0.10)
+    'look': 0.9,              # m, free distance counted up to this
+    'min_free': 0.25,         # m free needed to take a direction (less when the target is closer)
+    'slow_free': 0.50,        # m, full speed only with this much free
+    'v': 0.08,                # m/s
+    'k_w': 1.6,               # rad/s per rad of direction
+    'w_max': 1.0,
+    'turn_deg': 50.0,         # direction further off than this: turn in place first
+    'step_deg': 5.0,          # candidate directions -90..90 deg in these steps
+    'keep': 0.3,              # cost per rad of change from the last direction (no left/right flapping)
+}
+
+
+def free_distance(scan, theta, half_width, look):
+    '''Free length of a straight corridor (half_width) from the robot centre in direction theta (rad).'''
+    c, s = math.cos(theta), math.sin(theta)
+    along = scan.x * c + scan.y * s
+    perp = -scan.x * s + scan.y * c
+    sel = (along > 0.0) & (abs(perp) < half_width)
+    if not sel.any():
+        return look
+    return min(look, float(along[sel].min()))
+
+
+class GapPlanner(object):
+    '''Goal-directed obstacle avoidance on one LiDAR scan: of the directions whose corridor is free,
+    take the one closest to the target bearing. Not trapped by a free-standing obstacle the way a
+    wall follower is (it leaves the obstacle as soon as the target side opens).'''
+
+    def __init__(self, p=None):
+        self.p = dict(GAP_DEFAULTS, **(p or {}))
+        self.prev = 0.0
+        self.mode = 'init'
+
+    def step(self, scan, bearing, dist, need=None):
+        '''bearing: target direction (rad, robot frame, + left); dist: m to the target (speed);
+        need: m free required along a direction (default min(min_free, dist)). Returns (v, w).'''
+        p = self.p
+        need = min(p['min_free'], max(dist if need is None else need, 0.12))
+        best, best_cost, best_free = None, None, 0.0
+        n = int(round(90.0 / p['step_deg']))
+        for i in range(-n, n + 1):
+            th = math.radians(i * p['step_deg'])
+            f = free_distance(scan, th, p['half_width'], p['look'])
+            if f < need:
+                continue
+            cost = abs(wrap(th - bearing)) + p['keep'] * abs(th - self.prev)
+            if best_cost is None or cost < best_cost:
+                best, best_cost, best_free = th, cost, f
+        if best is None:
+            # boxed in ahead: turn in place toward the side with more room
+            left = free_distance(scan, math.radians(70.0), p['half_width'], p['look'])
+            right = free_distance(scan, math.radians(-70.0), p['half_width'], p['look'])
+            self.mode = 'blocked'
+            self.prev = 0.0
+            return 0.0, (0.6 if left >= right else -0.6) * p['w_max']
+        self.prev = best
+        w = clip(p['k_w'] * best, -p['w_max'], p['w_max'])
+        if abs(best) > math.radians(p['turn_deg']):
+            self.mode = 'turn %.0f' % math.degrees(best)
+            return 0.0, w
+        room = clip((best_free - 0.12) / max(p['slow_free'] - 0.12, 1e-3), 0.3, 1.0)
+        v = p['v'] * room * math.cos(best) * min(1.0, dist / 0.15 + 0.3)
+        self.mode = 'go %.0f free %.2f' % (math.degrees(best), best_free)
+        return v, w
+
+
 class WallFollower(object):
     def __init__(self, p=None):
         self.p = dict(WALL_DEFAULTS, **(p or {}))

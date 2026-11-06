@@ -95,6 +95,81 @@ def test_tunnel_reaches_exit_without_contact(extra):
     assert clear.min() > 0.0, clear.min()
 
 
+class TunnelBox(object):
+    '''Tunnel box like the Gazebo one at any size: inner faces x ox..ox+W, y oy-H..oy; entrance gap in
+    the top wall at the left (robot comes in heading -y), exit gap low in the right wall.'''
+
+    def __init__(self, W, H, ox, oy, entry_off=0.208, gap_in=0.365, exit_off=0.222, gap_out=0.376, t=0.05):
+        self.ex, self.ey, self.oy = ox + entry_off, oy - H + exit_off, oy
+        self.x1 = ox + W
+        self.walls = [((ox - t / 2, oy - H / 2), (t, H + 2 * t)),
+                      ((ox + W / 2, oy - H - t / 2), (W + 2 * t, t)),
+                      ((ox + W + t / 2, (oy - H + gap_out + oy + t) / 2), (t, H + t - gap_out)),
+                      (((ox + gap_in + ox + W + t) / 2, oy + t / 2), (W + t - gap_in, t))]
+        self.exit_fwd = (oy + 0.163) - self.ey     # tunnel frame: walls on both sides 0.163 m before the inner face
+        self.exit_left = self.x1 - self.ex
+
+    def world(self, obs):
+        w = World()
+        for (cx, cy), (sx, sy) in self.walls:
+            w.add_box(cx, cy, sx, sy)
+        for o in obs:
+            (w.add_circle if o[0] == 'c' else w.add_box)(*o[1:])
+        return w
+
+    def lane_status(self, pose):
+        x, y, yaw = pose
+        if abs(x - self.ex) < 0.14 and y > self.oy + 0.12:
+            return 'both'
+        if x > self.x1 - 0.25 and abs(y - self.ey) < 0.14 and abs(yaw) < 0.6:
+            return 'both'
+        return 'lost'
+
+    def lane_path(self, pose, out, mission):
+        if pose[1] > self.oy - 0.5 and pose[0] < self.ex + 0.4:
+            return [(self.ex, self.oy + 0.8), (self.ex, self.oy - 0.7)]
+        return [(self.x1 - 0.4, self.ey), (self.x1 + 2.0, self.ey)]
+
+
+GAZEBO_TUNNEL = TunnelBox(2.154, 2.069, -2.203, -0.163)      # = tunnel_world()
+RULE_TUNNEL = TunnelBox(1.8, 1.8, 0.0, 0.0)                  # rulebook interior 1.8 x 1.8 m
+
+# Random passable layouts where steering toward the exit at each tick (no map) got stuck in a pocket
+# facing the exit. The previous right-hand wall following did not get out of two of them either
+# (gazebo_box_before_exit, rule_boxes_both_sides: circling / contact).
+POCKETS = {
+    'gazebo_pocket_at_entrance': (GAZEBO_TUNNEL, [('c', -1.58, -0.79, 0.17), ('b', -1.34, -0.41, 0.19, 0.18, 1.5),
+                                                  ('c', -1.83, -0.94, 0.05), ('b', -0.28, -1.54, 0.23, 0.19, 0.2)]),
+    'gazebo_box_before_exit': (GAZEBO_TUNNEL, [('c', -0.84, -1.5, 0.11), ('b', -0.47, -1.82, 0.22, 0.25, 0.45)]),
+    'rule_four_cylinders': (RULE_TUNNEL, [('c', 1.0, -0.6, 0.16), ('c', 1.0, -1.2, 0.16), ('c', 1.32, -1.03, 0.09),
+                                          ('c', 1.28, -0.38, 0.13)]),
+    'rule_boxes_both_sides': (RULE_TUNNEL, [('b', 0.37, -0.46, 0.37, 0.34, 2.1), ('c', 1.23, -0.81, 0.13),
+                                            ('b', 0.21, -1.4, 0.11, 0.13, 0.31), ('b', 1.14, -0.43, 0.27, 0.34, 0.11)]),
+}
+
+
+@pytest.mark.parametrize('name', sorted(POCKETS))
+def test_tunnel_plans_round_pockets(name):
+    tun, obs = POCKETS[name]
+    m = Tunnel({'exit_fwd': tun.exit_fwd, 'exit_left': tun.exit_left})
+    pose, trace, clear = run(m, tun.world(obs), (tun.ex, tun.oy + 0.5, -math.pi / 2), tun.lane_path,
+                             tun.lane_status, steps=1500)
+    assert m.done and m.result == 'ok', (m.phase, pose)
+    assert pose[0] > tun.x1 - 0.25 and abs(pose[1] - tun.ey) < 0.14, pose
+    assert clear.min() > 0.0, clear.min()
+
+
+def test_tunnel_exit_parameters_off_by_20cm():
+    '''The grid finds the opening itself: exit_fwd / exit_left 0.2 m off still gets out.'''
+    tun = GAZEBO_TUNNEL
+    for df, dl in ((0.2, -0.2), (-0.2, 0.2)):
+        m = Tunnel({'exit_fwd': tun.exit_fwd + df, 'exit_left': tun.exit_left + dl})
+        pose, trace, clear = run(m, tunnel_world(), (tun.ex, tun.oy + 0.5, -math.pi / 2), tun.lane_path,
+                                 tun.lane_status, steps=1500)
+        assert m.done and pose[0] > tun.x1 - 0.25 and abs(pose[1] - tun.ey) < 0.14, (df, dl, m.phase, pose)
+        assert clear.min() > 0.0, (df, dl, clear.min())
+
+
 # ---------------------------------------------------------------- parking
 
 LOT = {'corridor_x': 0.577, 'left_x': 0.863, 'right_x': 0.295, 'row_y': 0.864, 'road_y': 2.006}
