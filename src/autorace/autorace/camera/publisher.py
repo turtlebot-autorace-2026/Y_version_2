@@ -5,6 +5,8 @@ import cv2
 import pickle
 import os
 
+from autorace.camera.device import open_capture
+
 class UndistortedVideoPublisher(Node):
     def __init__(self):
         super().__init__('undistorted_video_publisher')
@@ -27,11 +29,14 @@ class UndistortedVideoPublisher(Node):
         self.camera_matrix = calib_data['camera_matrix']
         self.dist_coeffs = calib_data['dist_coeffs']
 
-        # Open camera
-        self.cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        # Open camera: a stable /dev/v4l name (config/camera_params.yaml), not a bare index that can
+        # swap with the front camera after a reboot / re-plug
+        device = str(self.declare_parameter('device', '0').value)
+        self.cap, opened = open_capture(device, cv2)
         if not self.cap.isOpened():
-            self.get_logger().error("Cannot open camera.")
+            self.get_logger().error("Cannot open lane camera %s." % opened)
             return
+        self.get_logger().info('lane camera: %s' % opened)
 
         # Capture one native 16:9 stream and derive the 4:3 view from it.
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))

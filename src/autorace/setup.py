@@ -29,6 +29,7 @@ setup(
             'camera_publisher = autorace.camera.publisher:main',
             'camera_publisher2 = autorace.camera.publisher2:main',
             'camera_viewer = autorace.camera.viewer:main',
+            'list_cameras = autorace.camera.list_cameras:main',
             # senior's mission_model (sign detection)
             'sign_detection = autorace.sign.detection:main',
             # lane_detection_ad

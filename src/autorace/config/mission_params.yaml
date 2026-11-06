@@ -15,6 +15,8 @@ mission_fsm:
     start_mode: light              # light = wait for green | go = drive at once
     missions: [intersection, construction, parking, level_crossing]   # tunnel off for now: add 'tunnel' to enable
     pending_m: 1.0                 # a sign seen during another mission still starts its mission within this
+    intersection_on_turn_sign: false   # true: /left /right start the intersection without the triangle
+                                       # (practice map only; on the course the parking left arrow would too)
 
     traffic_light:
       need_red_first: true         # accept green only after a red (guards a static false green)
@@ -22,12 +24,15 @@ mission_fsm:
       fallback_s: 0.0              # >0: go this long after the last red/yellow even without green
       no_camera_go_s: 0.0          # >0: go if no front-camera frame arrived this long (sim.launch sets 5.0)
 
-    intersection:                  # /intersection (triangle) arms, then /left or /right
+    intersection:                  # /intersection (triangle) arms (slow), then exactly one of /left /right
       arm_timeout_m: 4.0
-      left_line: yellow            # left branch outer line (course texture)
-      right_line: white
-      hold_m: 1.0                  # after the last sighting of the chosen sign (signs stand at the fork)
-      timeout_s: 30.0
+      left_line: yellow            # outer line of the left branch (robot drives with yellow on its left)
+      right_line: white            # outer line of the right branch
+      around_deg: 140.0            # exit by heading: round the island end (~180 deg away from the sign side)
+      exit_deg: 50.0               #   then turned back toward the sign side (~90 deg) = into the exit
+      exit_m: 0.25                 #   then this far more on the outer line, then both lines
+      max_m: 5.0                   # m after the decision without that pattern -> both lines anyway
+      timeout_s: 120.0
 
     construction:                  # follow the line of the current corridor, odometry lane change between
       start_line: white            # Gazebo: box 1 sits at the inner (yellow) corner -> enter on white

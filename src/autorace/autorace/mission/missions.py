@@ -139,40 +139,100 @@ class TrafficLight(Mission):
 # ------------------------------------------------------------------------------- intersection
 
 class Intersection(Mission):
-    '''Started by /intersection (triangle). Waits for /left or /right, then follows only the line
-    on that side until hold_m after the chosen sign was last seen (the signs stand on the island
-    at the fork). Left/right before the triangle are ignored by the FSM (not started).'''
+    '''Started by /intersection (triangle; FSM option intersection_on_turn_sign: also by /left /right).
+    Slow until exactly one of /left, /right is up, then follow only the OUTER line of that branch
+    until the robot has gone round the island and turned into the exit.
+
+    Layout (Gazebo v014 and the club map): a stadium-shaped island inside a ring, the signs on the
+    island facing the entry. Each branch: turn toward the sign side, go round the island end, run
+    along the far side, turn toward the sign side again into the exit. The outer line of the branch
+    bends into the exit by itself. Club map photo (2026-11-06): the island is yellow on one half and
+    white on the other, each half next to the branch whose outer line has the other colour, so
+    following one colour does not pick up the island (Gazebo island colours: not checked).
+
+    Exit by heading, measured as the turn u since the decision (+ = toward the chosen side; only
+    differences are used, so a bend in the approach road does not matter):
+      into the branch          u rises to a peak P      (~ +90)
+      round the island end     P - u >= around_deg      (~ 180)
+      into the exit            u - (lowest u) >= exit_deg   (~ 90)
+    then exit_m more on the outer line, then both lines again.
+
+    Why not "hold_m after the sign was last seen" (the old rule): the sign leaves the front camera at
+    the fork, so 1 m later the robot is still in the ring. Back on both lines there, the lane node's
+    pair check rejects the pair at the exit mouth and keeps yellow (lane_mode) - on the branch whose
+    island line is yellow that is the island, and the robot goes round again.'''
     name = 'intersection'
     DEFAULTS = {
         'arm_timeout_m': 4.0,       # m without a direction sign -> abort (not counted as done)
-        'left_line': 'yellow',      # course texture: left branch outer line is yellow
+        'left_line': 'yellow',      # outer line of the left branch (robot drives with yellow on its left)
         'right_line': 'white',
-        'hold_m': 1.0,              # m after the last sighting
-        'timeout_s': 30.0,
+        'around_deg': 140.0,        # turn away from the sign side after the peak = round the island end (~180)
+        'exit_deg': 50.0,           # then back toward the sign side = into the exit (~90)
+        'exit_m': 0.25,             # m on the outer line after the exit turn is seen
+        'max_m': 5.0,               # m after the decision without the exit pattern -> hand back (done)
+        'timeout_s': 120.0,
     }
 
     def start(self, ctx):
         Mission.start(self, ctx)
-        self.branch = None
+        self.branch, self.sgn = None, 0.0
+        self.u = self.peak = self.low = 0.0
+        self.prev_yaw = ctx.yaw
         self._enter('armed', ctx)
 
+    def _track(self, ctx):
+        '''u: turn since the decision, + toward the chosen side (odometry yaw, unwrapped).'''
+        self.u += self.sgn * math.degrees(wrap(ctx.yaw - self.prev_yaw))
+        self.prev_yaw = ctx.yaw
+
     def step(self, ctx):
-        s = ctx.signs
+        s, p = ctx.signs, self.p
         if self.phase == 'armed':
             l, r = s.active['left'], s.active['right']
-            if l != r:
-                self.branch = 'left' if l else 'right'
-                self._enter('branch_' + self.branch, ctx)
-            elif self.phase_dist(ctx) >= self.p['arm_timeout_m']:
-                self._finish('abort', 'no left/right within %.1f m' % self.p['arm_timeout_m'])
-                return Outputs()
-            else:
-                return Outputs()
-        since = s.since_seen(self.branch, ctx.travel) or 0.0
-        if since >= self.p['hold_m'] or ctx.t - self.phase_t >= self.p['timeout_s']:
-            self._finish('ok', '%s, %.2f m after last sighting' % (self.branch, since))
+            if l == r:
+                if self.phase_dist(ctx) >= p['arm_timeout_m']:
+                    self._finish('abort', 'no single left/right within %.1f m (%s)'
+                                 % (p['arm_timeout_m'], 'both up' if l else 'none'))
+                    return Outputs()
+                return Outputs(slow=True)            # approach the fork slowly
+            self.branch = 'left' if l else 'right'
+            self.sgn = 1.0 if l else -1.0
+            self.u = self.peak = self.low = 0.0
+            self.prev_yaw = ctx.yaw
+            self._enter('branch', ctx)
+        line = p[self.branch + '_line']
+        self._track(ctx)
+        if self.phase_dist_total(ctx) >= p['max_m'] or ctx.t - self.decided_t >= p['timeout_s']:
+            self._finish('ok', '%s, exit not seen within %.1f m / %.0f s, phase %s u=%.0f'
+                         % (self.branch, p['max_m'], p['timeout_s'], self.phase, self.u))
             return Outputs()
-        return Outputs(follow_line=self.p[self.branch + '_line'], slow=True)
+        if self.phase == 'branch':
+            self.peak = max(self.peak, self.u)
+            if self.peak - self.u >= p['around_deg']:
+                self.low = self.u
+                self._enter('far_side', ctx)
+        elif self.phase == 'far_side':
+            self.low = min(self.low, self.u)
+            if self.u - self.low >= p['exit_deg']:
+                self._enter('exit', ctx)
+        elif self.phase == 'exit':
+            if self.phase_dist(ctx) >= p['exit_m']:
+                self._finish('ok', '%s, out of the ring' % self.branch)
+                return Outputs()
+        return Outputs(follow_line=line, slow=True)
+
+    def _enter(self, phase, ctx):
+        Mission._enter(self, phase, ctx)
+        if phase == 'branch':
+            self.decided_t, self.decided_travel = ctx.t, ctx.travel
+
+    def phase_dist_total(self, ctx):
+        return ctx.travel - self.decided_travel
+
+    def status(self):
+        if self.branch is None:
+            return '%s/%s' % (self.name, self.phase)
+        return '%s/%s %s u=%.0f peak=%.0f' % (self.name, self.phase, self.branch, self.u, self.peak)
 
 
 # ------------------------------------------------------------------------------- construction

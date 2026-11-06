@@ -1,4 +1,5 @@
 '''Offline checks of the sign board, mission FSM and cmd_vel mux (no ROS).'''
+import math
 import os
 import sys
 
@@ -14,19 +15,29 @@ from autorace.mission.signs import SignBoard  # noqa: E402
 class Run(object):
     '''Drives straight along x; signs are set like mission_model does (level, on change only).'''
 
-    def __init__(self, start_mode='go', missions=None, **mission_params):
+    def __init__(self, start_mode='go', missions=None, fsm=None, yaw=0.0, **mission_params):
         p = {'start_mode': start_mode}
         if missions is not None:
             p['missions'] = missions
+        p.update(fsm or {})
         self.fsm = MissionFSM(p, mission_params)
         self.signs = SignBoard()
-        self.t, self.x = 0.0, 0.0
+        self.t, self.x, self.yaw = 0.0, 0.0, math.radians(yaw)
         self.light, self.bar, self.seq, self.lane, self.lane_seq = None, None, 0, 'both', 0
         self.out = self.tick()
 
     def ctx(self):
-        return Ctx(t=self.t, x=self.x, travel=self.x, signs=self.signs, lane_status=self.lane,
+        yaw = math.atan2(math.sin(self.yaw), math.cos(self.yaw))      # odometry yaw is wrapped
+        return Ctx(t=self.t, x=self.x, yaw=yaw, travel=self.x, signs=self.signs, lane_status=self.lane,
                    lane_seq=self.lane_seq, light=self.light, light_seq=self.seq, bar=self.bar, bar_seq=self.seq)
+
+    def turn(self, deg, dist, steps=20):
+        '''Drive dist while the heading changes by deg (+ = left); returns the outputs of every tick.'''
+        outs = []
+        for _ in range(steps):
+            self.yaw += math.radians(deg) / steps
+            outs.append(self.drive(dist / steps, steps=1))
+        return outs
 
     def tick(self):
         self.signs.touch(self.x)
@@ -107,24 +118,75 @@ def test_left_right_without_triangle_do_nothing():
     assert r.out.follow_line == 'yellow' and r.out.slow
 
 
+@pytest.mark.parametrize('yaw0', [0.0, 175.0])              # 175: odometry yaw wraps at +-180 in the ring
 @pytest.mark.parametrize('side,line', [('left', 'yellow'), ('right', 'white')])
-def test_intersection_hold_from_last_sighting(side, line):
-    r = Run(intersection={'hold_m': 1.0})
+def test_intersection_round_the_island_to_the_exit(side, line, yaw0):
+    '''Outer line from the decision until the robot has turned into the exit, not 1 m after the
+    sign left the camera (old rule: back on both lines on the far side -> round the island again).'''
+    s = 1.0 if side == 'left' else -1.0
+    r = Run(yaw=yaw0)
     r.sign('intersection', True)
-    r.drive(0.2)
+    r.drive(0.3)
+    assert r.fsm.active.phase == 'armed' and r.out.slow and r.out.follow_line == 'both'
     r.sign('intersection', False)
     r.sign(side, True)
-    r.drive(1.5)                          # sign visible for 1.5 m
-    r.sign(side, False)                   # mission_model: False 5 frames after the last sighting
-    r.drive(0.9)
-    assert r.out.follow_line == line
-    r.drive(0.2)
-    assert r.fsm.state == 'LANE' and r.out.follow_line == 'both'
+    r.drive(0.4)                                    # decided; approach the island
+    r.sign(side, False)                             # the sign leaves the front camera at the fork
+    outs = r.turn(s * 90, 0.45)                     # into the branch
+    outs += r.turn(0, 0.3)                          # along the near side of the island
+    outs += r.turn(-s * 180, 0.95)                  # round the island end
+    outs += r.turn(0, 0.4)                          # along the far side: 2.1 m after the sign was lost
+    assert all(o.follow_line == line and o.slow for o in outs)
+    assert r.fsm.active.phase == 'far_side'
+    outs = r.turn(s * 90, 0.45)                     # into the exit
+    assert r.fsm.active.phase == 'exit' and all(o.follow_line == line for o in outs)
+    r.turn(0, 0.3)
+    assert r.fsm.state == 'LANE' and r.out.follow_line == 'both' and not r.out.slow
     assert r.fsm.finished['intersection'] == 'ok'
-    r.sign('intersection', True)          # once only
+    r.sign('intersection', True)                    # once only
     r.sign('left', True)
     r.drive(0.3)
     assert r.fsm.state == 'LANE'
+
+
+def test_intersection_bend_and_wobble_do_not_fake_the_exit():
+    '''A bend of the approach road the other way after the decision, and lane wobble.'''
+    r = Run()
+    r.sign('intersection', True)
+    r.sign('right', True)
+    r.drive(0.1)
+    r.turn(45, 0.3)                                 # approach bends left, branch is right
+    for _ in range(3):
+        r.turn(10, 0.1)
+        r.turn(-10, 0.1)
+    assert r.fsm.active.phase == 'branch'
+    r.turn(-135, 0.5)                               # into the right branch
+    r.turn(180, 0.95)                               # round the island end
+    assert r.fsm.active.phase == 'far_side'
+    r.turn(-90, 0.45)
+    r.turn(0, 0.3)
+    assert r.fsm.finished['intersection'] == 'ok' and r.out.follow_line == 'both'
+
+
+def test_intersection_no_exit_pattern_hands_back_at_max_m():
+    r = Run(intersection={'max_m': 2.0})
+    r.sign('intersection', True)
+    r.sign('left', True)
+    r.drive(0.0, steps=1)                           # decided here
+    r.drive(1.9)
+    assert r.out.follow_line == 'yellow'
+    r.drive(0.2)
+    assert r.fsm.state == 'LANE' and r.out.follow_line == 'both'
+    assert r.fsm.finished['intersection'] == 'ok'   # branch was taken: not started again
+
+
+def test_turn_sign_starts_intersection_when_enabled():
+    '''Practice map without the triangle sign (intersection_on_turn_sign); off by default (test above).'''
+    r = Run(fsm={'intersection_on_turn_sign': True})
+    r.sign('right', True)
+    r.drive(0.1)
+    assert r.fsm.active.name == 'intersection' and r.fsm.active.branch == 'right'
+    assert r.out.follow_line == 'white' and r.out.slow
 
 
 def test_intersection_abort_can_restart():
@@ -145,7 +207,7 @@ def test_both_directions_wait():
     r.sign('left', True)
     r.sign('right', True)
     r.drive(0.3)
-    assert r.fsm.active.phase == 'armed' and r.out.follow_line == 'both'
+    assert r.fsm.active.phase == 'armed' and r.out.follow_line == 'both' and r.out.slow
     r.sign('right', False)
     r.drive(0.1)
     assert r.out.follow_line == 'yellow'
@@ -154,7 +216,7 @@ def test_both_directions_wait():
 # ---------------------------------------------------------------- pending / order
 
 def test_sign_during_other_mission_is_pending():
-    r = Run(intersection={'hold_m': 0.5})
+    r = Run(intersection={'max_m': 0.7})
     r.sign('intersection', True)
     r.sign('right', True)
     r.drive(0.2)
@@ -192,7 +254,7 @@ def test_traffic_light_no_camera():
 
 
 def test_sign_still_visible_after_pending_expired():
-    r = Run(intersection={'hold_m': 1.5})
+    r = Run(intersection={'max_m': 1.95})
     r.sign('intersection', True)
     r.sign('right', True)
     r.drive(0.1)
@@ -207,7 +269,7 @@ def test_sign_still_visible_after_pending_expired():
 
 
 def test_pending_dropped_after_pending_m():
-    r = Run(intersection={'hold_m': 2.0}, missions=['intersection', 'construction', 'parking',
+    r = Run(intersection={'max_m': 2.0}, missions=['intersection', 'construction', 'parking',
                                                     'level_crossing', 'tunnel'])
     r.sign('intersection', True)
     r.sign('right', True)

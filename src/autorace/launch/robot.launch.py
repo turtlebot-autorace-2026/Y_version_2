@@ -5,7 +5,8 @@
 Starts, in this order of data flow:
   turtlebot3_bringup robot.launch.py   /odom, /scan, takes /cmd_vel         (only on the robot, see bringup)
   camera_publisher   (senior camera_ros publisher)   /camera  lane camera, undistorted 640x480
-  camera_publisher2  (senior camera_ros publisher2)  /camera2 front camera (/dev/video2)
+  camera_publisher2  (senior camera_ros publisher2)  /camera2 front camera
+                     devices: config/camera_params.yaml (or lane_camera:= front_camera:=)
   sign_detection     (senior mission_model, YOLO11n) /parking /left /right /stop /construction /intersection /tunnel
   lane_detection     (lane_detection_ad, YOLO26n-seg) /cmd_vel_lane
   mission_fsm        (missions_v1)                    which mission, lane inputs, /mission/drive, /cmd_vel_mission
@@ -71,9 +72,14 @@ def _setup(context):
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(tb3, 'launch', 'robot.launch.py'))))
     if cameras:
+        # devices from config/camera_params.yaml; lane_camera:= / front_camera:= override for one run
+        camera_params = arg('camera_params') or os.path.join(share, 'config', 'camera_params.yaml')
+        lane_cam, front_cam = arg('lane_camera').strip(), arg('front_camera').strip()
         actions += [
-            Node(package=PKG, executable='camera_publisher', name='camera_publisher', output='screen'),
-            Node(package=PKG, executable='camera_publisher2', name='camera_publisher2', output='screen'),
+            Node(package=PKG, executable='camera_publisher', name='camera_publisher', output='screen',
+                 parameters=[camera_params] + ([{'device': lane_cam}] if lane_cam else [])),
+            Node(package=PKG, executable='camera_publisher2', name='camera_publisher2', output='screen',
+                 parameters=[camera_params] + ([{'device': front_cam}] if front_cam else [])),
         ]
     if not (bringup and cameras):
         actions.append(LogInfo(msg='[autorace] not starting %s here: they must run on the robot'
@@ -93,7 +99,8 @@ def _setup(context):
         Node(package=PKG, executable='cmd_vel_mux', name='cmd_vel_mux', output='screen',
              parameters=[mission_params]),
         Node(package=PKG, executable='mission_fsm', name='mission_fsm', output='screen',
-             parameters=[mission_params, {'start_mode': arg('start_mode')}]),
+             parameters=[mission_params, {'start_mode': arg('start_mode')}]
+             + ([{'intersection_on_turn_sign': True}] if _flag(context, 'intersection_on_turn_sign', False) else [])),
     ]
     return actions
 
@@ -103,11 +110,18 @@ def generate_launch_description():
         DeclareLaunchArgument('bringup', default_value='auto', description='turtlebot3_bringup: auto | true | false'),
         DeclareLaunchArgument('cameras', default_value='auto', description='camera_ros publishers: auto | true | false'),
         DeclareLaunchArgument('start_mode', default_value='light', description='light = wait for green | go'),
+        DeclareLaunchArgument('intersection_on_turn_sign', default_value='false',
+                              description='true: /left /right start the intersection (practice map without '
+                                          'the triangle sign; never on the course)'),
         DeclareLaunchArgument('v_max', default_value='0.18', description='lane speed on straights m/s (bends slow down by themselves)'),
         DeclareLaunchArgument('python', default_value='', description='python with ultralytics for the YOLO nodes'),
         DeclareLaunchArgument('device', default_value='', description="YOLO device: '' auto, 'cpu', '0'"),
         DeclareLaunchArgument('show', default_value='false', description='cv2 windows (need a display)'),
         DeclareLaunchArgument('lane_params', default_value='', description='default: config/lane_params.yaml'),
         DeclareLaunchArgument('mission_params', default_value='', description='default: config/mission_params.yaml'),
+        DeclareLaunchArgument('camera_params', default_value='', description='default: config/camera_params.yaml'),
+        DeclareLaunchArgument('lane_camera', default_value='',
+                              description='lane camera device for this run, e.g. /dev/v4l/by-path/...-video-index0'),
+        DeclareLaunchArgument('front_camera', default_value='', description='front camera device for this run'),
         OpaqueFunction(function=_setup),
     ])

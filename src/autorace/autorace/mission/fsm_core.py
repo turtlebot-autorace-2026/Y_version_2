@@ -13,7 +13,8 @@ runs is kept as pending and starts when that one ends, if the robot has not driv
 pending_m since. Each mission runs once; an aborted one (e.g. intersection without a direction
 sign) may start again. /left /right never start anything on their own: they only count inside the
 intersection mission, so a left/right sign seen anywhere else (near the start, the parking-area
-left arrow) does nothing.
+left arrow) does nothing. Exception for practice maps without the triangle sign:
+intersection_on_turn_sign = true makes /left /right start the intersection too.
 '''
 from autorace.mission.missions import (Construction, Intersection, LevelCrossing, Outputs, Parking, Tunnel,
                                        TrafficLight)
@@ -26,6 +27,9 @@ DEFAULTS = {
     'start_mode': 'light',          # light = wait for green | go = drive immediately
     'missions': ['intersection', 'construction', 'parking', 'level_crossing'],   # tunnel: add to enable
     'pending_m': 1.0,
+    # /left or /right also start the intersection mission. Only for a practice map without the
+    # triangle sign: on the course, the parking-area left arrow would start it too. Keep false there.
+    'intersection_on_turn_sign': False,
 }
 
 
@@ -68,9 +72,14 @@ class MissionFSM(object):
         '''Camera check the node must run now: light | bar | None.'''
         return self.active.vision if self.active is not None else None
 
+    def triggers(self):
+        if self.p['intersection_on_turn_sign']:
+            return TRIGGERS + (('left', 'intersection'), ('right', 'intersection'))
+        return TRIGGERS
+
     def step(self, ctx):
         for name, t, travel in ctx.signs.pop_rises():
-            for sign, mission in TRIGGERS:
+            for sign, mission in self.triggers():
                 if sign == name and mission in self.p['missions'] and self.finished.get(mission) != 'ok':
                     if self.active is None or self.active.name != mission:
                         self.pending[mission] = travel
@@ -108,7 +117,7 @@ class MissionFSM(object):
     def _still_visible(self, ctx):
         '''Missions never run whose sign is active right now: their rising edge may have come during
         another mission and expired from pending while the sign stayed in view.'''
-        for sign, mission in TRIGGERS:
+        for sign, mission in self.triggers():
             if mission in self.p['missions'] and mission not in self.finished and ctx.signs.active.get(sign):
                 return mission
         return None

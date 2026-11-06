@@ -1,0 +1,15 @@
+# Which camera is which. Fill in once per robot with the names `ros2 run autorace list_cameras` prints
+# (stop robot.launch first: an open camera cannot be checked).
+#
+#   /dev/v4l/by-path/...-video-index0   tied to the USB port: use when both cameras are the same model,
+#                                       and keep each camera in its port
+#   /dev/v4l/by-id/...-video-index0     tied to the camera: use when the models differ
+#
+# '0' / '2' are the senior's bare indices: they follow USB enumeration order and can swap after a
+# reboot or re-plug (lane node then sees the front camera). Keep the quotes: device is a string.
+camera_publisher:
+  ros__parameters:
+    device: '0'          # lane camera (calibrated, 1280x720) -> /camera
+camera_publisher2:
+  ros__parameters:
+    device: '2'          # front camera (signs, traffic light, barrier) -> /camera2
