@@ -26,9 +26,11 @@ GRID_DEFAULTS = {
     'r_hard': 0.11,         # m: no path closer to an obstacle (robot half width ~0.10)
     'r_soft': 0.25,         # m: closer than this costs extra
     'soft_cost': 3.0,       # extra cost per cell at r_hard, falling to 0 at r_soft
-    'back_m': 0.15,         # domain: this far behind the entrance line
-    'side_back_m': 0.6,     # domain: this far away from the exit side
-    'far_m': 0.45,          # domain: this far beyond the exit centre line
+    'back_m': 0.15,         # domain: this far behind the tunnel frame origin, only in the entry corridor
+    'entrance_m': 0.12,     # domain: before this (the entrance wall line) only the entry corridor
+    'entry_half_m': 0.15,   # entry corridor half width there
+    'side_back_m': 0.30,    # domain: this far away from the exit side (Gazebo side wall 0.21-0.26)
+    'far_m': 0.30,          # domain: this far beyond the exit centre line (Gazebo far wall 0.22-0.27)
     'exit_half_m': 0.30,    # exit corridor half length (along f) through the opening
     'outside_m': 0.70,      # exit corridor beyond the opening
     'max_iter': 600,
@@ -73,7 +75,13 @@ class GridNav(object):
                       int(math.ceil((smax - self.smin) / self.res)) + 1)
         f = self.fmin + self.res * np.arange(self.shape[0])[:, None]
         s = self.smin + self.res * np.arange(self.shape[1])[None, :]
-        interior = (f >= -p['back_m']) & (s <= exit_side + 0.05)
+        # Unknown cells count as free, so everything outside the tunnel walls must be outside the domain:
+        # otherwise a plan leaves through the entrance and drives round the outside of the walls (found in
+        # the 2D sim). Behind the entrance wall line only the entry corridor; the box margins stay within
+        # r_hard of the walls, where the walls' own growth blocks them.
+        interior = (f >= -p['back_m']) & (f <= exit_fwd + p['far_m']) & (s >= -p['side_back_m']) \
+            & (s <= exit_side + 0.05)
+        interior &= (f >= p['entrance_m']) | (np.abs(s) <= p['entry_half_m'])
         corridor = (np.abs(f - exit_fwd) <= p['exit_half_m']) & (s >= exit_side - 0.05)
         self.domain = interior | corridor
         self.hits = np.zeros(self.shape, np.int32)

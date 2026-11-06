@@ -669,7 +669,7 @@ class Tunnel(Mission):
         self._map(ctx)
         fwd, left = self._local(ctx)
         sgn = 1.0 if p['exit_left'] >= 0 else -1.0
-        if self.k == 0 and sgn * left >= abs(p['exit_left']) - p['inside_m'] and abs(fwd - p['exit_fwd']) < 0.3:
+        if self.k == 0 and sgn * left >= abs(p['exit_left']) - p['inside_m'] and abs(fwd - p['exit_fwd']) < 0.2:
             self.k = 1                                           # inside the exit opening
         dist, bearing = self._target(ctx)
         good = self.good.update(ctx.lane_seq, ctx.lane_status in GOOD_LANE)

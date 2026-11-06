@@ -124,11 +124,11 @@ ros2 run rqt_image_view rqt_image_view /lane_detection/debug/compressed  # 차�
 
 ## 검증한 것 / 안 한 것
 
-- pytest 53개 통과 (`cd src/autorace && python3 -m pytest -q test`)
+- pytest 54개 통과 (`cd src/autorace && python3 -m pytest -q test`)
   - 차선 추정 8개
   - 미션 FSM과 mux (교차로: 섬을 돌아 출구까지 헤딩 흐름, 접근로 굽음·흔들림, max_m)
   - 카메라 장치 이름 해석 (가짜 /dev 트리)
-  - 맵 기하로 돌린 2D 시뮬: 공사, 주차, 터널 (Gazebo 터널 + 규정 1.8 m 터널, 장애물 주머니 배치 4개, 출구 좌표 ±0.2 m 오차)
+  - 맵 기하로 돌린 2D 시뮬: 공사, 주차, 터널 (Gazebo 터널 + 규정 1.8 m 터널, 장애물 주머니 배치 4개, 안쪽 길이 없을 때 터널 밖으로 안 나감, 출구 좌표 ±0.2 m 오차)
   - 색 규칙
 - launch 파일 2개는 ROS 2 Galactic의 실제 `launch` / `launch_ros` 코드로 펼쳐서 각 노드의 실행 명령과 파라미터를 확인했다.
   - venv 파이썬 prefix

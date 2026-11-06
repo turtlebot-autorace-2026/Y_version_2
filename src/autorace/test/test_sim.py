@@ -148,6 +148,14 @@ POCKETS = {
 }
 
 
+def outside_excursion(tun, trace):
+    '''How far the robot got outside the tunnel after it first entered: (back out of the entrance beyond
+    the entry corridor, past the entry-side wall, past the far wall), m; all <= 0 when it stayed inside.'''
+    inside = trace[np.argmax(trace[:, 1] < tun.oy):]
+    return (inside[:, 1].max() - (tun.oy + 0.35), (tun.ex - 0.25) - inside[:, 0].min(),
+            (tun.ey - 0.25) - inside[:, 1].min())
+
+
 @pytest.mark.parametrize('name', sorted(POCKETS))
 def test_tunnel_plans_round_pockets(name):
     tun, obs = POCKETS[name]
@@ -157,6 +165,21 @@ def test_tunnel_plans_round_pockets(name):
     assert m.done and m.result == 'ok', (m.phase, pose)
     assert pose[0] > tun.x1 - 0.25 and abs(pose[1] - tun.ey) < 0.14, pose
     assert clear.min() > 0.0, clear.min()
+    assert max(outside_excursion(tun, trace)) <= 0.0, outside_excursion(tun, trace)
+
+
+def test_tunnel_no_way_through_stays_inside():
+    '''No passage inside (gaps 0.16-0.22 m for a 0.2 m robot). Unknown cells count as free, and the
+    first grid domain reached past the walls: the plan went out through the entrance and round the
+    outside of the left and bottom walls. Now it stays inside and hands back to the lane at max_s.'''
+    tun = GAZEBO_TUNNEL
+    obs = [('c', -1.57, -0.42, 0.05), ('b', -0.74, -1.77, 0.22, 0.18, 0.56), ('c', -1.87, -0.74, 0.17),
+           ('b', -0.6, -1.35, 0.19, 0.24, 0.81)]
+    m = Tunnel({'exit_fwd': tun.exit_fwd, 'exit_left': tun.exit_left, 'max_s': 40.0})
+    pose, trace, clear = run(m, tun.world(obs), (tun.ex, tun.oy + 0.5, -math.pi / 2), tun.lane_path,
+                             tun.lane_status, steps=600)
+    assert m.phase == 'exit' or m.done
+    assert max(outside_excursion(tun, trace)) <= 0.0, outside_excursion(tun, trace)
 
 
 def test_tunnel_exit_parameters_off_by_20cm():
