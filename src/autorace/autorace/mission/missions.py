@@ -108,6 +108,12 @@ class TrafficLight(Mission):
         'green_frames': 2,
         'fallback_s': 0.0,          # >0: go anyway this long after the last red/yellow (0 = off)
         'no_camera_go_s': 0.0,      # >0: go if no camera frame at all arrived this long (0 = off; robot: keep 0)
+        'jitter_after_s': 0.0,      # >0: waiting this long, nudge back and forth (jitter_v for jitter_s each
+                                    # way, net zero) so the robot is never "stopped" for 30 s before the start.
+                                    # Only if the organizer says the 30 s rule applies while waiting for
+                                    # green (rules file, question 7-3). 0 = off (default)
+        'jitter_v': 0.02,
+        'jitter_s': 0.5,
         'no_red_after_s': 4.0,      # waiting this long without ever seeing a red -> green alone is enough.
                                     # Red lens outside the ROI, or the light already green at put-down:
                                     # with need_red_first alone the robot never starts (the timer runs from
@@ -137,6 +143,10 @@ class TrafficLight(Mission):
         if self.p['fallback_s'] > 0 and self.last_ry_t is not None and ctx.t - self.last_ry_t > self.p['fallback_s']:
             self._finish('fallback', 'no light for %.1f s' % (ctx.t - self.last_ry_t))
             return Outputs(drive='lane', reset=True)
+        p = self.p
+        if p['jitter_after_s'] > 0 and ctx.t - self.phase_t >= p['jitter_after_s']:
+            k = int((ctx.t - self.phase_t - p['jitter_after_s']) / p['jitter_s'])
+            return Outputs(drive='mission', cmd=(p['jitter_v'] if k % 2 == 0 else -p['jitter_v'], 0.0))
         return Outputs(drive='stop')
 
     def status(self):

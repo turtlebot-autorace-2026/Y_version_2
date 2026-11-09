@@ -258,6 +258,28 @@ def test_traffic_light_green_without_red_after_wait():
     assert r2.out.drive == 'stop'
 
 
+def test_traffic_light_jitter_keeps_moving_net_zero():
+    '''jitter_after_s: after that long on red, alternate +-jitter_v every jitter_s (net displacement 0);
+    green still starts the robot at once. Off by default.'''
+    r = Run(start_mode='light', traffic_light={'jitter_after_s': 2.0, 'jitter_s': 0.5, 'jitter_v': 0.02})
+    r.light = 'red'
+    r.drive(0.0, steps=19)                   # 1.9 s: still a plain stop
+    assert r.out.drive == 'stop'
+    cmds = []
+    for _ in range(40):                      # 4 s of jitter
+        r.drive(0.0, steps=1)
+        assert r.out.drive == 'mission' and r.out.cmd[1] == 0.0
+        cmds.append(r.out.cmd[0])
+    assert set(cmds) == {0.02, -0.02} and abs(sum(cmds)) < 1e-9
+    r.light = 'green'
+    r.drive(0.0, steps=2)
+    assert r.fsm.state == 'LANE'
+    r0 = Run(start_mode='light')             # default: off
+    r0.light = 'red'
+    r0.drive(0.0, steps=400)
+    assert r0.out.drive == 'stop'
+
+
 def test_traffic_light_no_camera():
     r = Run(start_mode='light', traffic_light={'no_camera_go_s': 5.0})
     r.light = None

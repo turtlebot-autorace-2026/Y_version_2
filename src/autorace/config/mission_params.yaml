@@ -24,6 +24,9 @@ mission_fsm:
       fallback_s: 0.0              # >0: go this long after the last red/yellow even without green
       no_camera_go_s: 0.0          # >0: go if no front-camera frame arrived this long (sim.launch sets 5.0)
       no_red_after_s: 4.0          # waited this long and never saw a red -> green alone starts us (red lens outside the ROI)
+      jitter_after_s: 0.0          # >0: after this long waiting, nudge +-jitter_v (net zero) so the 30 s no-motion rule
+      jitter_v: 0.02               #     cannot end the run before the start. OFF until the organizer confirms the
+      jitter_s: 0.5                #     rule applies while waiting for green (rules file 7-3). Suggested value: 20.0
 
     intersection:                  # /intersection (triangle) arms (slow), then exactly one of /left /right
       arm_timeout_m: 4.0

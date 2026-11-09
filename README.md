@@ -125,6 +125,14 @@ FSM은 미션이 끝날 때 `/lane_state`를 한 틱 False로 보내 차선 노�
 
 전에는 `max_wait_s`(25 s)가 지나면 그냥 출발했다. 바는 몇 초면 올라가므로 25 s 동안 "내려옴"이면 카메라 규칙이 고착된 것인데, 그때 출발하면 센서 2(바 앞 6 cm)에 걸려 실패다. 지금은 0.02 m/s로 기어가되 전방 0.20 m에 LiDAR 반사가 있으면 그 자리에서 멈춘다. 움직이고 있으니 30 s 무동작 규칙에도 안 걸리고, 진짜 바가 있으면 LiDAR가 막는다. 카메라가 "올라감"으로 바뀌면 바로 차선 주행으로 넘어간다.
 
+## 배선 검사 (test_wiring.py)
+
+가짜 rclpy(`test/fakeros.py`)로 launch 파일이 띄우는 노드 전부를 실제로 생성해서, Gazebo 첫 실행에서나 드러나던 것을 미리 잡는다: YAML 파라미터 이름 오타(Galactic은 선언 안 된 파라미터를 조용히 버림), YAML의 정수 ↔ 노드의 실수 불일치(ROS 2는 `1`을 `1.0`으로 안 바꿈), 구독만 있고 발행자 없는 토픽, 메시지 타입 불일치, latched 발행자에 일반 구독자, launch가 없는 파라미터를 설정하는 것, `/cmd_vel`에 mux 외 발행자. robot.launch와 sim.launch 두 구성 모두 검사한다. 세 가지 결함을 일부러 넣어 각각 잡히는 것을 확인했다. 현재 코드는 전부 통과.
+
+## 신호등 대기 중 30 s 규칙 대비 (기본 꺼짐)
+
+`traffic_light.jitter_after_s`를 20.0으로 켜면, 빨강 대기 20 s 뒤부터 0.02 m/s로 0.5 s씩 앞뒤로 움직인다(순 변위 0). 30 s 무동작 규칙이 출발 전에도 적용되는지 **주최 측에 확인한 뒤에만** 켠다. 적용 안 되면 켤 이유가 없다(출발선 앞에서 쓸데없이 움직임).
+
 ## 규정 대조 (2026-11-09, 규정집 v.2023.1 기준)
 
 | 규정 | 코드 | 상태 |
@@ -165,7 +173,7 @@ ros2 run rqt_image_view rqt_image_view /lane_detection/debug/compressed  # 차�
 
 ## 검증한 것 / 안 한 것
 
-- pytest 76개 통과 (`cd src/autorace && python3 -m pytest -q test`)
+- pytest 93개 통과 (`cd src/autorace && python3 -m pytest -q test`)
   - 차선 추정 8개
   - 미션 FSM과 mux (교차로: 섬을 돌아 출구까지 헤딩 흐름, 접근로 굽음·흔들림, max_m)
   - 카메라 장치 이름 해석 (가짜 /dev 트리)
