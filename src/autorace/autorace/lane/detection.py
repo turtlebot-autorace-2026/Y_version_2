@@ -165,16 +165,23 @@ class LaneDetection(Node):
 
     def stateSubscriber_callback(self, msg):
         '''Edge-triggered: a repeated True/False is ignored, so the mission FSM can re-send it
-        safely. To restart with a fresh estimator, send False then True.'''
+        safely. To restart with a fresh estimator, send False then True (the FSM does that for one
+        tick on every hand-back). The restart keeps the speed the node was commanding: a fresh
+        estimator starts from 0 m/s and max_lin_acc would otherwise make every hand-back a stop.
+        The robot is not stopped here either: cmd_vel_mux stops it (drive=stop) when the FSM means
+        stop, and while a mission drives, this node's zero would reach the robot the moment the mux
+        switches back to the lane.'''
         if msg.data == self.state:
             return
         self.state = msg.data
         if self.state:
+            v_prev, w_prev = self.estimator.v_cmd, self.estimator.w_cmd
             self.estimator = LaneEstimator(self.lane_config())
-            self.get_logger().info('Start Lane Detection')
+            self.estimator.v_cmd, self.estimator.w_cmd = v_prev, w_prev
+            self.get_logger().info('Start Lane Detection (from %.2f m/s)' % v_prev)
         else:
-            self.velocityPublisher.publish(Twist())
-            self.get_logger().info('Terminate Lane Detection')
+            self.latest_msg = None
+            self.get_logger().info('Lane Detection paused')
 
     def laneModeSubscriber_callback(self, msg):
         self.lane_mode = msg.data

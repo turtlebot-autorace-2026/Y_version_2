@@ -23,6 +23,7 @@ mission_fsm:
       green_frames: 2
       fallback_s: 0.0              # >0: go this long after the last red/yellow even without green
       no_camera_go_s: 0.0          # >0: go if no front-camera frame arrived this long (sim.launch sets 5.0)
+      no_red_after_s: 4.0          # waited this long and never saw a red -> green alone starts us (red lens outside the ROI)
 
     intersection:                  # /intersection (triangle) arms (slow), then exactly one of /left /right
       arm_timeout_m: 4.0

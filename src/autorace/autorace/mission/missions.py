@@ -108,6 +108,11 @@ class TrafficLight(Mission):
         'green_frames': 2,
         'fallback_s': 0.0,          # >0: go anyway this long after the last red/yellow (0 = off)
         'no_camera_go_s': 0.0,      # >0: go if no camera frame at all arrived this long (0 = off; robot: keep 0)
+        'no_red_after_s': 4.0,      # waiting this long without ever seeing a red -> green alone is enough.
+                                    # Red lens outside the ROI, or the light already green at put-down:
+                                    # with need_red_first alone the robot never starts (the timer runs from
+                                    # the first green). Not "green for N s": green lasts 5 s, so waiting on
+                                    # green would start on the next red. 0 = off
     }
 
     def start(self, ctx):
@@ -121,9 +126,10 @@ class TrafficLight(Mission):
         if ctx.light in ('red', 'yellow'):
             self.last_ry_t = ctx.t
             self.seen_red = self.seen_red or ctx.light == 'red'
-        ok = ctx.light == 'green' and (self.seen_red or not self.p['need_red_first'])
+        no_red_ok = self.p['no_red_after_s'] > 0 and ctx.t - self.phase_t >= self.p['no_red_after_s']
+        ok = ctx.light == 'green' and (self.seen_red or not self.p['need_red_first'] or no_red_ok)
         if self.green.update(ctx.light_seq, ok) >= self.p['green_frames']:
-            self._finish('ok', 'green')
+            self._finish('ok', 'green' if self.seen_red else 'green (no red seen in %.0f s)' % (ctx.t - self.phase_t))
             return Outputs(drive='lane', reset=True)
         if self.p['no_camera_go_s'] > 0 and ctx.light_seq == self.seq0 and ctx.t - self.phase_t >= self.p['no_camera_go_s']:
             self._finish('no_camera', 'no front-camera frame for %.1f s' % (ctx.t - self.phase_t))
@@ -297,8 +303,10 @@ class Construction(Mission):
 
         # follow the line of the current corridor; look for boxes in both corridors (lane frame)
         out = Outputs(follow_line=self.line, slow=True)
-        if ctx.scan is not None:
-            cy, cth = ctx.lane_centre if ctx.lane_centre is not None else (0.0, 0.0)
+        if ctx.scan is not None and ctx.lane_centre is not None:
+            # no lane centre (line lost / stale): the corridor geometry is unknown, keep following; a
+            # change decided on (0, 0) here would start the odometry manoeuvre toward a guessed corridor
+            cy, cth = ctx.lane_centre
             c, s_ = math.cos(cth), math.sin(cth)
             xl, yl = ctx.scan.x * c + ctx.scan.y * s_, -ctx.scan.x * s_ + ctx.scan.y * c
             side = -1.0 if self.line == 'yellow' else 1.0          # other corridor: right of yellow's

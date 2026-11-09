@@ -239,6 +239,25 @@ def test_tunnel_on_by_default_and_can_be_left_out():
     assert r.fsm.state == 'LANE' and not r.fsm.pending
 
 
+def test_traffic_light_green_without_red_after_wait():
+    '''Red never seen (lens outside the ROI, or already green at put-down): green alone starts the robot
+    once no_red_after_s has passed; before that a lone green is ignored.'''
+    r = Run(start_mode='light', traffic_light={'no_red_after_s': 4.0})
+    r.light = 'green'
+    r.drive(0.0, steps=30)               # 3 s of green, no red before it: still waiting
+    assert r.out.drive == 'stop'
+    r.light = None                       # light cycled away, we are still looking
+    r.drive(0.0, steps=15)
+    assert r.out.drive == 'stop'
+    r.light = 'green'                    # 4.5 s waited, green again -> go after green_frames
+    r.drive(0.0, steps=2)
+    assert r.fsm.state == 'LANE' and r.fsm.finished['traffic_light'] == 'ok'
+    r2 = Run(start_mode='light', traffic_light={'no_red_after_s': 0.0})   # off: never starts on green alone
+    r2.light = 'green'
+    r2.drive(0.0, steps=100)
+    assert r2.out.drive == 'stop'
+
+
 def test_traffic_light_no_camera():
     r = Run(start_mode='light', traffic_light={'no_camera_go_s': 5.0})
     r.light = None

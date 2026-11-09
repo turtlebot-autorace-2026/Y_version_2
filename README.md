@@ -113,6 +113,14 @@ hakee의 `autorace_gazebo`가 설치(source)돼 있으면 Gazebo까지 같이 �
 
 `/mission/state`에 `tunnel/goal ... plans=N`과 지금 고른 방향, 남은 여유 거리가 나온다.
 
+## 미션 → 차선 복귀 때 멈추지 않음
+
+FSM은 미션이 끝날 때 `/lane_state`를 한 틱 False로 보내 차선 노드의 추정기를 새로 만든다. 전에는 이때 차선 노드가 0 속도를 한 번 내보내고 새 추정기가 0 m/s에서 `max_lin_acc`로 다시 올라가서, 복귀마다 완전 정지 + 0.2~0.3 s 재가속이 들어갔다(한 바퀴에 7번 이상). 지금은 직전 속도를 새 추정기에 넘기고, 일시정지 때 0을 보내지 않는다. 로봇을 세우는 건 `cmd_vel_mux`(drive=stop, 소스 침묵 0.5 s)와 카메라 워치독만 한다.
+
+## 신호등: 빨강을 못 봐도 출발
+
+`need_red_first`는 그대로지만, `no_red_after_s`(4 s) 동안 기다렸는데 빨강을 한 번도 못 봤으면 초록만으로 출발한다. 빨간 렌즈가 ROI 밖이거나 내려놓을 때 이미 초록이면 전에는 영원히 안 출발했다. "초록 N초 지속"이 아닌 이유: 초록은 5 s뿐이라 그걸 기다리면 다음 빨강에 출발한다.
+
 ## 출발 램프 (cmd_vel_mux)
 
 정지 뒤(모드 stop, 소스 침묵, FSM 사망) 다시 움직일 때 전진 속도는 `accel`(기본 0.3 m/s², 0.18 m/s까지 0.6 s)보다 빨리 오르지 못한다. 각속도는 같은 비율로 줄여서 소스가 요청한 회전 반경을 유지한다. 차선 노드는 되돌려받을 때마다 추정기를 재시작해 첫 프레임부터 최고 속도를 내기 때문이다. 감속·후진은 제한하지 않는다. 2025년 팀 driving 노드의 프레임당 0.03 m/s 제한을 시간 기준으로 옮긴 것이다. `accel: 0.0`이면 끈다.
@@ -137,7 +145,7 @@ ros2 run rqt_image_view rqt_image_view /lane_detection/debug/compressed  # 차�
 
 ## 검증한 것 / 안 한 것
 
-- pytest 74개 통과 (`cd src/autorace && python3 -m pytest -q test`)
+- pytest 76개 통과 (`cd src/autorace && python3 -m pytest -q test`)
   - 차선 추정 8개
   - 미션 FSM과 mux (교차로: 섬을 돌아 출구까지 헤딩 흐름, 접근로 굽음·흔들림, max_m)
   - 카메라 장치 이름 해석 (가짜 /dev 트리)

@@ -385,12 +385,19 @@ class LineLane(object):
         return lat, math.atan2(math.sin(th - yaw), math.cos(th - yaw))
 
 
-@pytest.mark.parametrize('real', [None] + sorted(REAL))
+@pytest.mark.parametrize('real', [None, 'dropout'] + sorted(REAL))
 def test_construction_slalom(real):
+    '''dropout: /lane/centre missing 0.5 s in every 2 s (YOLO misses). A change decided while it is
+    missing would assume the corridor at (0, 0): now no decision is taken without it.'''
     world = construction_world()
     m = Construction()
     lane = LineLane()
-    pose, trace, clear = run(m, world, (1.0, 0.291, 0.0), lane, steps=900, lane_centre=lane.centre, after_steps=60,
+    n = [0]
+
+    def centre(pose):
+        n[0] += 1
+        return None if real == 'dropout' and n[0] % 20 < 5 else lane.centre(pose)
+    pose, trace, clear = run(m, world, (1.0, 0.291, 0.0), lane, steps=900, lane_centre=centre, after_steps=60,
                              real=REAL.get(real))
     assert m.done and m.result == 'ok', m.phase
     assert m.changes == 2, m.changes                         # outer -> inner (box 2) -> outer (box 3)
