@@ -12,25 +12,32 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.dirname(__file__))
 from autorace.mission.missions import Construction, Ctx, Outputs, Parking, Tunnel  # noqa: E402
 from autorace.mission.signs import SignBoard  # noqa: E402
-from simlib import World, follow_polyline, integrate  # noqa: E402
+from simlib import Robot, World, follow_polyline  # noqa: E402
 
 DT = 0.1
 ROBOT_R = 0.10     # m, footprint radius used for clearance (wheels at +-0.099 m)
 
 
 def run(mission, world, pose, lane_path, lane_status=lambda pose: 'both', steps=3000, latency_steps=1,
-        on_step=None, lane_centre=lambda pose: None, after_steps=0):
-    '''Runs one mission. drive=lane -> pure pursuit on lane_path(pose, out); drive=mission -> out.cmd.'''
+        on_step=None, lane_centre=lambda pose: None, after_steps=0, real=None):
+    '''Runs one mission. drive=lane -> pure pursuit on lane_path(pose, out); drive=mission -> out.cmd.
+    real: simlib.Robot options (odometry error, 5 Hz smeared LiDAR, range noise); the mission then sees
+    odometry while the LiDAR, the lane stand-in and the returned trace use the true pose.'''
     signs = SignBoard()
-    pose, travel, t, seq = list(pose), 0.0, 0.0, 0
+    robot = Robot(world, pose, DT, **(real or {}))
+    seq = 0
     queue = [(0.0, 0.0)] * latency_steps
     trace, clear = [], []
-    mission.start(Ctx(t=t, x=pose[0], y=pose[1], yaw=pose[2], travel=travel, signs=signs, scan=world.scan(pose)))
+
+    def ctx_now():
+        x, y, yaw = robot.odom
+        return Ctx(t=robot.t, x=x, y=y, yaw=yaw, travel=robot.travel, signs=signs, lane_status=lane_status(robot.true),
+                   lane_seq=seq, scan=robot.scan(), lane_centre=lane_centre(robot.true))
+    mission.start(ctx_now())
     for _ in range(steps):
         seq += 1
-        ctx = Ctx(t=t, x=pose[0], y=pose[1], yaw=pose[2], travel=travel, signs=signs,
-                  lane_status=lane_status(pose), lane_seq=seq, scan=world.scan(pose), lane_centre=lane_centre(pose))
-        out = mission.step(ctx) if not mission.done else Outputs()     # FSM: plain lane once done
+        out = mission.step(ctx_now()) if not mission.done else Outputs()     # FSM: plain lane once done
+        pose = robot.true
         if on_step:
             on_step(pose, out, mission)
         if mission.done:
@@ -45,13 +52,11 @@ def run(mission, world, pose, lane_path, lane_status=lambda pose: 'both', steps=
             cmd = (0.0, 0.0)
         queue.append(cmd)
         v, w = queue.pop(0)
-        old = pose
-        pose = integrate(pose, v, w, DT)
-        travel += math.hypot(pose[0] - old[0], pose[1] - old[1])
-        t += DT
+        robot.move(v, w)
+        pose = robot.true
         trace.append(tuple(pose))
         clear.append(world.clearance(pose[0], pose[1], ROBOT_R))
-    return pose, np.array(trace), np.array(clear)
+    return robot.true, np.array(trace), np.array(clear)
 
 
 # ---------------------------------------------------------------- tunnel
@@ -182,6 +187,30 @@ def test_tunnel_no_way_through_stays_inside():
     assert max(outside_excursion(tun, trace)) <= 0.0, outside_excursion(tun, trace)
 
 
+# Real-robot effects (simlib.Robot): LDS-01 5 Hz sweep smeared over the motion + spec-level range noise,
+# odometry scale error. Before the turning-scan gate and the 0.8 m grid range, gazebo_box_before_exit hit the
+# box with the smeared 5 Hz scans alone. rule_boxes_both_sides is left out: its narrowest passage is 210 mm
+# for the 200 mm robot (5 mm a side, below r_hard), it gets through about half the time.
+REAL = {'A': dict(scan_hz=5.0, smear=True, noise=0.0075, noise_rel=0.025, odom_w=0.03, odom_v=0.02),
+        'B': dict(scan_hz=5.0, smear=True, noise=0.0075, noise_rel=0.025, odom_w=-0.03, odom_v=-0.02)}
+
+
+@pytest.mark.parametrize('real', sorted(REAL))
+@pytest.mark.parametrize('name', ['map', 'gazebo_box_before_exit', 'gazebo_pocket_at_entrance', 'rule_four_cylinders'])
+def test_tunnel_real_robot_effects(name, real):
+    if name == 'map':
+        tun, world, m = GAZEBO_TUNNEL, tunnel_world(), Tunnel()
+    else:
+        tun, obs = POCKETS[name]
+        world, m = tun.world(obs), Tunnel({'exit_fwd': tun.exit_fwd, 'exit_left': tun.exit_left})
+    pose, trace, clear = run(m, world, (tun.ex, tun.oy + 0.5, -math.pi / 2), tun.lane_path, tun.lane_status,
+                             steps=1500, real=REAL[real])
+    assert m.done and m.result == 'ok', (m.phase, pose)
+    assert pose[0] > tun.x1 - 0.25 and abs(pose[1] - tun.ey) < 0.14, pose
+    assert clear.min() > 0.0, clear.min()
+    assert max(outside_excursion(tun, trace)) <= 0.0, outside_excursion(tun, trace)
+
+
 def test_tunnel_exit_parameters_off_by_20cm():
     '''The grid finds the opening itself: exit_fwd / exit_left 0.2 m off still gets out.'''
     tun = GAZEBO_TUNNEL
@@ -238,6 +267,49 @@ def test_parking_free_stall(house, expect):
     if house:
         assert clear.min() > 0.0, clear.min()
     assert pose[1] > 1.85 and abs(math.atan2(math.sin(pose[2] - math.pi), math.cos(pose[2] - math.pi))) < 0.35, pose
+
+
+def lane_centre_of(path_fn, mission, rng, sig_deg=1.5, sig_lat=0.005):
+    '''/lane/centre stand-in from the lane stand-in's path: (lateral m + left, heading rad), with noise.'''
+    def centre(pose):
+        p = _dense(path_fn(pose, None, mission))
+        x, y, yaw = pose
+        i = min(int(np.argmin(np.hypot(p[:, 0] - x, p[:, 1] - y))), len(p) - 6)
+        th = math.atan2(p[i + 5, 1] - p[i, 1], p[i + 5, 0] - p[i, 0])
+        lat = -math.sin(th) * (p[i, 0] - x) + math.cos(th) * (p[i, 1] - y)
+        a = th - yaw + math.radians(rng.normal(0.0, sig_deg))
+        return lat + rng.normal(0.0, sig_lat), math.atan2(math.sin(a), math.cos(a))
+    return centre
+
+
+@pytest.mark.parametrize('odom', [dict(odom_w=0.06), dict(odom_w=-0.06), dict(odom_w=-0.06, odom_v=-0.06)],
+                         ids=['yaw+6%', 'yaw-6%', 'yaw-6%_dist-6%'])
+@pytest.mark.parametrize('house,expect', [(None, 'left'), ('left', 'right'), ('right', 'left')])
+def test_parking_odometry_error(house, expect, odom):
+    '''Odometry scale error (Ø70 mm wheels vs Ø66 mm in the firmware would be -6 %). Without the lane
+    anchor in the spur, yaw +-3 % already put a corner on the stall line; footprint corners incl. the
+    heading error must stay inside the stall lines.'''
+    m = Parking()
+    stall = []
+
+    def watch(pose, out, mission):
+        if mission.phase == 'parked':
+            stall.append(tuple(pose))
+    centre = lane_centre_of(parking_lane_path, m, np.random.default_rng(7))
+    pose, trace, clear = run(m, parking_world(house), (1.5, LOT['road_y'], math.pi), parking_lane_path,
+                             on_step=watch, lane_centre=centre, real=dict(odom, scan_hz=5.0))
+    assert m.done and m.result == 'ok' and m.side == expect, (m.phase, m.side)
+    assert m.anchor_dev is not None, m.log
+    sx, sy, syaw = stall[0]
+    lo, hi = (0.722, 1.004) if expect == 'left' else (0.154, 0.436)
+    c, s = math.cos(syaw), math.sin(syaw)
+    for a in (-0.10, 0.07):
+        for b in (-0.10, 0.10):
+            px, py = sx + c * a - s * b, sy + s * a + c * b
+            assert lo + 0.013 < px < hi - 0.013 and 0.573 + 0.013 < py < 1.155 - 0.013, (stall[0], px, py)
+    if house:
+        assert clear.min() > 0.0, clear.min()
+    assert pose[1] > 1.85, pose
 
 
 # ---------------------------------------------------------------- construction
@@ -313,11 +385,13 @@ class LineLane(object):
         return lat, math.atan2(math.sin(th - yaw), math.cos(th - yaw))
 
 
-def test_construction_slalom():
+@pytest.mark.parametrize('real', [None] + sorted(REAL))
+def test_construction_slalom(real):
     world = construction_world()
     m = Construction()
     lane = LineLane()
-    pose, trace, clear = run(m, world, (1.0, 0.291, 0.0), lane, steps=900, lane_centre=lane.centre, after_steps=60)
+    pose, trace, clear = run(m, world, (1.0, 0.291, 0.0), lane, steps=900, lane_centre=lane.centre, after_steps=60,
+                             real=REAL.get(real))
     assert m.done and m.result == 'ok', m.phase
     assert m.changes == 2, m.changes                         # outer -> inner (box 2) -> outer (box 3)
     # touching is allowed by the rules, but the plan should clear the boxes

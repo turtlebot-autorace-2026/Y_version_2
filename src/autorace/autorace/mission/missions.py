@@ -335,7 +335,12 @@ class Parking(Mission):
 
     lane yellow (turns left into the spur) -> lane in the spur -> straight to the stall row ->
     LiDAR: which stall is free -> turn 90 deg -> in -> wait -> back out -> turn 90 deg more (facing
-    out) -> straight -> lane yellow (turns left onto the road) -> done.'''
+    out) -> straight -> lane yellow (turns left onto the road) -> done.
+
+    Corridor heading: first the road heading at the sign + 90 deg, then re-taken in the spur from
+    odometry yaw + /lane/centre heading (circular mean). Odometry yaw error over the ~180 deg turned
+    before the stall otherwise lands in the stall: 2D sim, yaw scale +-3 %: 5 deg in the stall and a
+    corner on the stall line; with the lane anchor every run stays >= 24 mm inside (+-6 %, 3 deg noise).'''
     name = 'parking'
     DEFAULTS = {
         'spur_turn_deg': 80.0,      # left turn done = in the spur (spur_lane_m is measured from here)
@@ -344,7 +349,11 @@ class Parking(Mission):
         'lot_drive_m': 0.49,        # straight to the stall row
         'occupied_range': 0.45,     # m, side sector closer than this = robot in that stall
         'default_side': 'left',     # both free (Gazebo has no house robot)
-        'bay_drive_m': 0.285,
+        'bay_drive_m': 0.30,        # stall centre 0.284 + 0.015: the footprint (0.10 m behind / 0.07 m ahead
+                                    # of the axle) is centred, not the axle
+        'anchor_from_m': 0.15,      # in the spur, lane heading samples from this far on
+        'anchor_min': 5,            # at least this many samples, else keep the heading from the sign
+        'anchor_max_dev_deg': 15.0, # lane heading further than this from the sign-based one: ignored
         'park_wait_s': 1.5,
         'scan_wait_s': 0.6,
         'exit_turn_deg': 60.0,      # left turn back onto the road
@@ -359,7 +368,23 @@ class Parking(Mission):
         # corridor heading from the (straight) road heading at the sign, not from the yaw after lane
         # following in the spur, which may still be swinging
         self.yaw_ref = wrap(ctx.yaw + math.radians(self.p['spur_angle_deg']))
+        self.anchor, self.anchor_dev = [], None
         self._enter('to_spur', ctx)
+
+    def _anchor(self):
+        '''Corridor heading from the lane samples taken in the spur, if there are enough and they agree
+        with the sign-based heading.'''
+        p = self.p
+        if len(self.anchor) < p['anchor_min']:
+            self.log.append('parking: %d lane heading samples in the spur, heading from the sign kept' % len(self.anchor))
+            return
+        a = math.atan2(sum(math.sin(v) for v in self.anchor), sum(math.cos(v) for v in self.anchor))
+        dev = wrap(a - self.yaw_ref)
+        if abs(dev) > math.radians(p['anchor_max_dev_deg']):
+            self.log.append('parking: lane heading %.1f deg off the sign-based one, ignored' % math.degrees(dev))
+            return
+        self.yaw_ref, self.anchor_dev = a, math.degrees(dev)
+        self.log.append('parking: corridor heading from the lane (%+.1f deg, %d samples)' % (self.anchor_dev, len(self.anchor)))
 
     def _dist(self, ctx):
         return math.hypot(ctx.x - self.phase_x, ctx.y - self.phase_y)
@@ -374,7 +399,10 @@ class Parking(Mission):
                 return Outputs()
             return Outputs(follow_line='yellow', slow=True)
         if ph == 'spur':
+            if ctx.lane_centre is not None and self.phase_dist(ctx) >= p['anchor_from_m']:
+                self.anchor.append(wrap(ctx.yaw + ctx.lane_centre[1]))
             if self.phase_dist(ctx) >= p['spur_lane_m']:
+                self._anchor()
                 self._enter('lot', ctx)
             else:
                 return Outputs(follow_line='yellow', slow=True)
@@ -539,6 +567,9 @@ class Tunnel(Mission):
         'outside_m': 0.40,          # target this far beyond the opening
         'reach_m': 0.15,            # target reached within this
         'replan_s': 1.0,
+        'scan_gate_deg': 4.0,       # scan into the grid only if the robot turned less than this since the
+                                    # previous one: an LDS sweep takes 0.2 s (5 Hz), so a scan taken while
+                                    # turning is smeared, and the grid keeps every hit for good
         'lookahead': 0.25,          # m down the planned path handed to the gap planner
         'stall_s': 10.0,            # no progress along the path this long -> escape
         'stall_progress': 0.05,     # m of cost-to-go
@@ -567,6 +598,7 @@ class Tunnel(Mission):
         self.bad, self.good = _FrameCounter(), _FrameCounter()
         self.frame, self.targets, self.k, self.grid = None, [], 0, None
         self.last_scan, self.escapes, self.plans = None, 0, 0
+        self.scan_yaw, self.skipped = None, 0
         self._enter('enter', ctx)
 
     # ---- tunnel frame -----------------------------------------------------------------
@@ -613,9 +645,14 @@ class Tunnel(Mission):
             return
         self.last_scan = ctx.scan
         g = self.grid
-        g.add_scan(ctx.scan, (ctx.x, ctx.y, ctx.yaw))
+        turned = self.scan_yaw is not None and abs(wrap(ctx.yaw - self.scan_yaw)) > math.radians(self.p['scan_gate_deg'])
+        self.scan_yaw = ctx.yaw
+        if turned:
+            self.skipped += 1                   # smeared: not into the grid (the gap planner still uses it)
+        else:
+            g.add_scan(ctx.scan, (ctx.x, ctx.y, ctx.yaw))
         if self.phase == 'goal' and (ctx.t - self.plan_t >= self.p['replan_s']
-                                     or g.path_blocked(ctx.x, ctx.y, self.p['lookahead'])):
+                                     or (not turned and g.path_blocked(ctx.x, ctx.y, self.p['lookahead']))):
             g.plan(self.targets[1])
             self.plan_t = ctx.t
             self.plans += 1
@@ -658,7 +695,8 @@ class Tunnel(Mission):
                 return Outputs(drive='mission', cmd=cmd)
         if self.phase == 'exit':
             if self.phase_dist(ctx) >= p['exit_m']:
-                self._finish('ok', 'out (%d plans, %d escapes)' % (self.plans, self.escapes))
+                self._finish('ok', 'out (%d plans, %d escapes, %d turning scans skipped)' % (
+                    self.plans, self.escapes, self.skipped))
             return Outputs()
 
         # goal / escape

@@ -23,6 +23,9 @@ NEIGHBOURS = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
 GRID_DEFAULTS = {
     'res': 0.03,            # m per cell
     'hits_min': 2,          # LiDAR hits for an obstacle cell
+    'max_r': 0.8,           # m: only points this close go into the grid. LDS-01 range noise is +-3.5 %
+                            # beyond 0.5 m and hits never decay, so far points left phantom cells
+                            # (2D sim with spec noise: 45/56 -> 52/56 runs out of the tunnel)
     'r_hard': 0.11,         # m: no path closer to an obstacle (robot half width ~0.10)
     'r_soft': 0.25,         # m: closer than this costs extra
     'soft_cost': 3.0,       # extra cost per cell at r_hard, falling to 0 at r_soft
@@ -113,8 +116,10 @@ class GridNav(object):
     def add_scan(self, scan, pose):
         x, y, yaw = pose
         c, s = math.cos(yaw), math.sin(yaw)
-        wx = x + c * scan.x - s * scan.y
-        wy = y + s * scan.x + c * scan.y
+        near = scan.r <= self.p['max_r']
+        sx, sy = scan.x[near], scan.y[near]
+        wx = x + c * sx - s * sy
+        wy = y + s * sx + c * sy
         dx, dy = wx - self.x0, wy - self.y0
         f = dx * self.c + dy * self.s
         sd = self.sgn * (-dx * self.s + dy * self.c)

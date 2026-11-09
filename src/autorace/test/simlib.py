@@ -70,6 +70,95 @@ class World(object):
         return d - radius
 
 
+def cast(world, ox, oy, ang, rmin=0.12, rmax=3.5):
+    '''Vectorised ray cast, one origin (ox, oy) and world angle per ray; inf = no return.'''
+    dx, dy = np.cos(ang)[:, None], np.sin(ang)[:, None]
+    ox, oy = ox[:, None], oy[:, None]
+    best = np.full(ang.size, rmax + 1.0)
+    if world.segs:
+        S = np.array(world.segs)
+        x0, y0, ex, ey = S[:, 0][None], S[:, 1][None], (S[:, 2] - S[:, 0])[None], (S[:, 3] - S[:, 1])[None]
+        den = dx * ey - dy * ex
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t = ((x0 - ox) * ey - (y0 - oy) * ex) / den
+            u = ((x0 - ox) * dy - (y0 - oy) * dx) / den
+        ok = (np.abs(den) > 1e-12) & (t > 0) & (u >= 0) & (u <= 1)
+        best = np.minimum(best, np.where(ok, t, np.inf).min(axis=1))
+    if world.circles:
+        C = np.array(world.circles)
+        fx, fy = ox - C[:, 0][None], oy - C[:, 1][None]
+        b = fx * dx + fy * dy
+        disc = b * b - (fx * fx + fy * fy - C[:, 2][None] ** 2)
+        with np.errstate(invalid='ignore'):
+            t = -b - np.sqrt(disc)
+        best = np.minimum(best, np.where((disc >= 0) & (t > 0), t, np.inf).min(axis=1))
+    return np.where((best >= rmin) & (best <= rmax), best, np.inf)
+
+
+class Robot(object):
+    '''Kinematic robot for the closed-loop runs. With no options it is the plain ideal robot (scan every
+    tick from the true pose, odometry = truth). Real-robot options:
+      odom_v, odom_w   odometry scale error (odometry reports (1 + e) x the true speed / turn rate)
+      scan_hz          LiDAR rate (TurtleBot3 LDS-01: 300 rpm = 5 Hz); the scan is reused between sweeps
+      smear            each ray taken at its own time during the 1 / scan_hz sweep, reported as one scan
+      noise, noise_rel range noise sigma = noise + noise_rel * r (LDS-01: +-10 mm < 0.5 m, +-3.5 % beyond)
+    The mission sees the odometry pose; the LiDAR, the lane stand-in and the clearance use the true pose.'''
+
+    def __init__(self, world, pose, dt=0.1, odom_v=0.0, odom_w=0.0, scan_hz=None, smear=False, noise=0.0,
+                 noise_rel=0.0, seed=0, n=360, lidar_x=-0.032):
+        self.world, self.dt = world, dt
+        self.true, self.odom = list(pose), list(pose)
+        self.odom_v, self.odom_w = odom_v, odom_w
+        self.scan_hz, self.smear, self.noise, self.noise_rel = scan_hz, smear, noise, noise_rel
+        self.real_scan = bool(scan_hz or smear or noise or noise_rel)
+        self.rng = np.random.default_rng(seed)
+        self.n, self.lidar_x = n, lidar_x
+        self.t, self.travel = 0.0, 0.0
+        self.hist = [(0.0, tuple(self.true))]
+        self.last, self.next_scan = None, 0.0
+
+    def move(self, v, w):
+        if self.smear:                          # pose history for the sweep
+            h = self.dt / 4
+            for k in range(4):
+                self.true = integrate(self.true, v, w, h, sub=1)
+                self.hist.append((self.t + (k + 1) * h, tuple(self.true)))
+            self.hist = self.hist[-60:]
+        else:
+            self.true = integrate(self.true, v, w, self.dt)
+        old = self.odom
+        self.odom = integrate(self.odom, v * (1.0 + self.odom_v), w * (1.0 + self.odom_w), self.dt)
+        self.travel += math.hypot(self.odom[0] - old[0], self.odom[1] - old[1])
+        self.t += self.dt
+
+    def _pose_at(self, t):
+        for tt, p in reversed(self.hist):
+            if tt <= t + 1e-9:
+                return p
+        return self.hist[0][1]
+
+    def scan(self):
+        if not self.real_scan:
+            return self.world.scan(self.true)
+        hz = self.scan_hz or 1.0 / self.dt
+        if self.last is not None and self.t < self.next_scan - 1e-9:
+            return self.last
+        n = self.n
+        a = 2 * math.pi * np.arange(n) / n
+        if self.smear:
+            P = np.array([self._pose_at(self.t - (1.0 - i / n) / hz) for i in range(n)])
+        else:
+            P = np.tile(np.array(self.true), (n, 1))
+        r = cast(self.world, P[:, 0] + self.lidar_x * np.cos(P[:, 2]), P[:, 1] + self.lidar_x * np.sin(P[:, 2]),
+                 P[:, 2] + a)
+        if self.noise or self.noise_rel:
+            fin = np.isfinite(r)
+            r[fin] += self.rng.normal(0.0, 1.0, int(fin.sum())) * (self.noise + self.noise_rel * r[fin])
+        self.last = Scan(r, 0.0, 2 * math.pi / n, 0.12, 3.5, self.lidar_x)
+        self.next_scan = self.t + 1.0 / hz
+        return self.last
+
+
 def integrate(pose, v, w, dt, sub=4):
     x, y, yaw = pose
     for _ in range(sub):
