@@ -333,7 +333,7 @@ def test_level_crossing_max_wait():
 # ---------------------------------------------------------------- mux
 
 def test_mux_selects_one_source():
-    mux = CmdVelMux(source_timeout=0.5, mode_timeout=1.0)
+    mux = CmdVelMux(source_timeout=0.5, mode_timeout=1.0, accel=0.0)
     assert mux.tick(0.0) == (ZERO, 'no drive mode from the FSM')
     mux.set_mode('lane', 0.0)
     assert mux.on_cmd('lane', 0.1, 0.2, 0.05) == (0.1, 0.2)
@@ -345,6 +345,29 @@ def test_mux_selects_one_source():
     mux.set_mode('stop', 0.8)
     assert mux.on_cmd('mission', 0.3, 0.0, 0.85) is None
     assert mux.tick(0.85) == (ZERO, 'mode stop')
+
+
+def test_mux_start_ramp():
+    '''After a stop the forward speed rises at accel m/s^2; w is scaled with v (same radius).'''
+    mux = CmdVelMux(source_timeout=0.5, mode_timeout=1.0, accel=0.3)
+    mux.set_mode('lane', 0.0)
+    mux.tick(0.0)                                             # a zero command went out at t=0
+    v, w = mux.on_cmd('lane', 0.18, 0.9, 0.1)
+    assert abs(v - 0.03) < 1e-9 and abs(w - 0.9 * 0.03 / 0.18) < 1e-9
+    v, w = mux.on_cmd('lane', 0.18, 0.9, 0.3)
+    assert abs(v - 0.09) < 1e-9
+    v, w = mux.on_cmd('lane', 0.18, 0.9, 0.7)
+    assert (v, w) == (0.18, 0.9)                              # ramp done, command passes unchanged
+    assert mux.on_cmd('lane', 0.10, 0.0, 0.75) == (0.10, 0.0)  # slowing down is never limited
+    assert mux.on_cmd('lane', -0.06, 0.0, 0.8) == (-0.06, 0.0)  # reverse is not ramped
+    mux.set_mode('stop', 1.0)
+    mux.tick(1.0)
+    mux.set_mode('mission', 1.05)
+    assert abs(mux.on_cmd('mission', 0.06, 0.0, 1.1)[0] - 0.03) < 1e-9   # ramps again after the stop
+    off = CmdVelMux(accel=0.0)
+    off.set_mode('lane', 0.0)
+    off.tick(0.0)
+    assert off.on_cmd('lane', 0.18, 0.9, 0.1) == (0.18, 0.9)
 
 
 def test_mux_fsm_dead():

@@ -113,6 +113,19 @@ hakee의 `autorace_gazebo`가 설치(source)돼 있으면 Gazebo까지 같이 �
 
 `/mission/state`에 `tunnel/goal ... plans=N`과 지금 고른 방향, 남은 여유 거리가 나온다.
 
+## 출발 램프 (cmd_vel_mux)
+
+정지 뒤(모드 stop, 소스 침묵, FSM 사망) 다시 움직일 때 전진 속도는 `accel`(기본 0.3 m/s², 0.18 m/s까지 0.6 s)보다 빨리 오르지 못한다. 각속도는 같은 비율로 줄여서 소스가 요청한 회전 반경을 유지한다. 차선 노드는 되돌려받을 때마다 추정기를 재시작해 첫 프레임부터 최고 속도를 내기 때문이다. 감속·후진은 제한하지 않는다. 2025년 팀 driving 노드의 프레임당 0.03 m/s 제한을 시간 기준으로 옮긴 것이다. `accel: 0.0`이면 끈다.
+
+## 2025년 팀 코드(driving_ninja)에서 아직 안 가져온 것 — Gazebo 로그 보고 결정
+
+선배 repo는 수정하지 않는다. 아래 둘은 로그에서 해당 증상이 보일 때만 옮긴다.
+
+| 항목 | 선배 방식 | 우리 현재 | 로그에서 볼 것 |
+| --- | --- | --- | --- |
+| 회전 표지판 ROI | `/left`·`/right`가 뜨면 BEV ROI를 중앙선부터 그쪽 영상 끝까지, 높이 1.4배, 30 s 유지 | `follow_line`으로 한쪽 선만 따라감, ROI 폭 ±250 px 그대로 | 교차로 `branch`~`exit` 구간의 `/lane_detection/status`에 `lost`나 `memory`가 연속으로 나오는지. 나오면 바깥쪽 선이 ROI를 벗어난 것 |
+| 실차 ROI/목표점 | `roi_top_row` 150 (기본 220), `lookahead_row` 300 (기본 400)로 낮춰 더 멀리 봄. 실차 튜닝 흔적(`#220` 주석) | 220 / 제어기 다름(근·원 분리) | 실차에서 `/lane_detection/debug/compressed`의 ROI 상자 안에 선이 직선에서 10줄 이상 잡히는지. 모자라면 `roi_top_row`를 내린다 |
+
 ## 보는 법
 
 ```bash
@@ -124,7 +137,7 @@ ros2 run rqt_image_view rqt_image_view /lane_detection/debug/compressed  # 차�
 
 ## 검증한 것 / 안 한 것
 
-- pytest 73개 통과 (`cd src/autorace && python3 -m pytest -q test`)
+- pytest 74개 통과 (`cd src/autorace && python3 -m pytest -q test`)
   - 차선 추정 8개
   - 미션 FSM과 mux (교차로: 섬을 돌아 출구까지 헤딩 흐름, 접근로 굽음·흔들림, max_m)
   - 카메라 장치 이름 해석 (가짜 /dev 트리)

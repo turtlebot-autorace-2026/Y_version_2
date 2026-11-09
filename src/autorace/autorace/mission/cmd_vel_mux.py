@@ -34,8 +34,9 @@ class CmdVelMuxNode(Node):
         p('source_timeout', 0.5)
         p('mode_timeout', 1.0)
         p('tick_hz', 20.0)
+        p('accel', 0.3)               # m/s^2 start ramp after any stop (0 = off)
         g = lambda k: self.get_parameter(k).value  # noqa: E731
-        self.mux = CmdVelMux(g('source_timeout'), g('mode_timeout'))
+        self.mux = CmdVelMux(g('source_timeout'), g('mode_timeout'), g('accel'))
         self.pub = self.create_publisher(Twist, g('out_topic'), 10)
         self.create_subscription(Twist, g('lane_topic'), lambda m: self.on_cmd('lane', m), 10)
         self.create_subscription(Twist, g('mission_topic'), lambda m: self.on_cmd('mission', m), 10)

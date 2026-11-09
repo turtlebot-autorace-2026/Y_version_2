@@ -149,3 +149,4 @@ cmd_vel_mux:
     source_timeout: 0.5
     mode_timeout: 1.0
     tick_hz: 20.0
+    accel: 0.3                     # m/s^2: forward speed rises at most this fast after a stop (0.18 m/s in 0.6 s)
