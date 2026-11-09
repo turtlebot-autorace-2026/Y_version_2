@@ -339,14 +339,20 @@ def test_level_crossing_stop_wait_go():
     assert r.fsm.finished['level_crossing'] == 'ok'
 
 
-def test_level_crossing_max_wait():
-    r = Run(level_crossing={'use_lidar': False, 'max_wait_s': 5.0})
+def test_level_crossing_max_wait_creeps_not_through():
+    '''Camera says "down" forever (stuck rule): after max_wait_s the robot creeps at creep_v on LiDAR
+    only (moving, for the 30 s rule) instead of driving through a lowered bar; a LiDAR return in front
+    holds it; the camera clearing hands back to the lane.'''
+    r = Run(level_crossing={'max_wait_s': 5.0})
     r.sign('stop', True)
     r.bar = 'down'
     r.drive(0.0, steps=3)
     assert r.out.drive == 'stop'
-    r.drive(0.0, steps=50)                # bar never opens: go before the 30 s rule
-    assert r.out.drive == 'lane'
+    r.drive(0.0, steps=50)                # 5 s: still "down" -> creep (no scan in Run = nothing in front)
+    assert r.out.drive == 'mission' and r.out.cmd == (0.02, 0.0), r.out.as_dict()
+    r.bar = 'up'
+    r.drive(0.0, steps=5)
+    assert r.out.drive == 'lane' and r.fsm.active.phase == 'go'
 
 
 # ---------------------------------------------------------------- mux

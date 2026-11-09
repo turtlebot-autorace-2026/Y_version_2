@@ -497,7 +497,12 @@ class LevelCrossing(Mission):
         'lidar_half_width': 0.10,
         'lidar_points': 3,
         'approach_max_m': 2.0,      # no bar within this -> done (abort)
-        'max_wait_s': 25.0,         # 30 s without motion ends the run
+        'max_wait_s': 25.0,         # bar still "down" this long: the camera rule is stuck (a bar lifts in a
+                                    # few seconds). Do not drive through (sensor 2 at 6 cm = fail): creep at
+                                    # creep_v while the LiDAR sees nothing in front, which also keeps the
+                                    # robot moving for the 30 s no-motion rule. LiDAR in front still stops it
+        'creep_v': 0.02,
+        'creep_lidar_x': 0.20,      # LiDAR box ahead while creeping (shorter than the approach box)
         'go_m': 0.35,
     }
 
@@ -507,11 +512,11 @@ class LevelCrossing(Mission):
         self.lidar_n = 0
         self._enter('approach', ctx)
 
-    def _lidar_down(self, ctx):
+    def _lidar_down(self, ctx, x=None):
         if not self.p['use_lidar'] or ctx.scan is None:
             return False
         hw = self.p['lidar_half_width']
-        return ctx.scan.count_box(0.05, self.p['lidar_x'], -hw, hw) >= self.p['lidar_points']
+        return ctx.scan.count_box(0.05, self.p['lidar_x'] if x is None else x, -hw, hw) >= self.p['lidar_points']
 
     def step(self, ctx):
         if self.phase == 'approach':
@@ -526,10 +531,21 @@ class LevelCrossing(Mission):
             return Outputs(slow=True)
         if self.phase == 'wait':
             clear = ctx.bar != 'down' and not self._lidar_down(ctx)
-            if self.up.update(ctx.bar_seq, clear) >= self.p['up_frames'] or ctx.t - self.phase_t > self.p['max_wait_s']:
+            if self.up.update(ctx.bar_seq, clear) >= self.p['up_frames']:
                 self._enter('go', ctx)
                 return Outputs(slow=True, reset=True)
-            return Outputs(drive='stop')
+            if ctx.t - self.phase_t > self.p['max_wait_s']:
+                self.log.append('level_crossing: bar "down" for %.0f s, camera rule stuck -> creeping on LiDAR' % self.p['max_wait_s'])
+                self._enter('creep', ctx)
+            else:
+                return Outputs(drive='stop')
+        if self.phase == 'creep':
+            if self.up.update(ctx.bar_seq, ctx.bar != 'down') >= self.p['up_frames'] or self.phase_dist(ctx) >= self.p['go_m']:
+                self._enter('go', ctx)
+                return Outputs(slow=True, reset=True)
+            if self._lidar_down(ctx, self.p['creep_lidar_x']):
+                return Outputs(drive='stop')              # something is there: hold (the robot did move)
+            return Outputs(drive='mission', cmd=(self.p['creep_v'], 0.0))
         if self.phase == 'go':
             if self.phase_dist(ctx) >= self.p['go_m']:
                 self._finish('ok', 'passed')

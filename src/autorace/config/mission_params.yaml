@@ -79,7 +79,9 @@ mission_fsm:
       lidar_half_width: 0.10
       lidar_points: 3
       approach_max_m: 2.0
-      max_wait_s: 25.0             # the run ends after 30 s without motion
+      max_wait_s: 25.0             # bar "down" this long = camera rule stuck -> creep on LiDAR (never drive through blind)
+      creep_v: 0.02
+      creep_lidar_x: 0.20
       go_m: 0.35
 
     tunnel:                        # dark: LiDAR grid built while driving + path to the exit (no map file)
