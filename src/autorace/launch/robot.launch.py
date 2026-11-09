@@ -14,12 +14,12 @@ Starts, in this order of data flow:
 
 bringup / cameras: auto = start them only when this computer is the robot (/dev/ttyACM0, the OpenCR, exists).
 On a laptop they are skipped: run `ros2 launch autorace robot.launch.py` on the robot too, or start them there.
-YOLO nodes run with `python` (default: ~/autorace/yolo_venv/bin/python if it exists, else the normal python3),
-the same rule as the senior's mission_model launch.
+YOLO nodes run with the venv python (active venv, <ws>/.venv, <ws>/src/autorace/.venv, ~/autorace/yolo_venv,
+in that order; python:= overrides). Without one they fail at `import ultralytics`.
 """
 import os
 
-from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -27,7 +27,29 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 PKG = 'autorace'
-VENV_PYTHON = os.path.expanduser('~/autorace/yolo_venv/bin/python')
+
+
+def find_venv_python():
+    '''Python with ultralytics for the two YOLO nodes. Order:
+      1. the venv that is active in this shell ($VIRTUAL_ENV, i.e. `source .venv/bin/activate` was run)
+      2. <workspace>/.venv             (workspace = two levels above this package's install prefix)
+      3. <workspace>/src/autorace/.venv
+      4. ~/autorace/yolo_venv          (the senior's location)
+    '' = none found: the nodes run with the system python3 and fail at `import ultralytics`.'''
+    candidates = []
+    if os.environ.get('VIRTUAL_ENV'):
+        candidates.append(os.path.join(os.environ['VIRTUAL_ENV'], 'bin', 'python'))
+    try:
+        ws = os.path.abspath(os.path.join(get_package_prefix(PKG), '..', '..'))
+        candidates += [os.path.join(ws, '.venv', 'bin', 'python'),
+                       os.path.join(ws, 'src', 'autorace', '.venv', 'bin', 'python')]
+    except PackageNotFoundError:
+        pass
+    candidates.append(os.path.expanduser('~/autorace/yolo_venv/bin/python'))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return ''
 OPENCR = '/dev/ttyACM0'
 
 
@@ -46,7 +68,7 @@ def _python(context):
     p = LaunchConfiguration('python').perform(context).strip()
     if p:
         return p
-    return VENV_PYTHON if os.path.exists(VENV_PYTHON) else ''
+    return find_venv_python()
 
 
 def _setup(context):
@@ -64,6 +86,9 @@ def _setup(context):
     actions = [LogInfo(msg='[autorace] on_robot=%s bringup=%s cameras=%s yolo python=%s start_mode=%s v_max=%s'
                        % (on_robot, bringup, cameras, python or 'python3 (script default)',
                           arg('start_mode'), arg('v_max')))]
+    if not python:
+        actions.append(LogInfo(msg='[autorace] WARNING: no venv with ultralytics found (.venv in the workspace, '
+                                   'or source .venv/bin/activate first). The YOLO nodes will fail to import.'))
     if bringup:
         try:
             tb3 = get_package_share_directory('turtlebot3_bringup')

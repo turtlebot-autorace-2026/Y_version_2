@@ -1,6 +1,85 @@
 # Y_version_2 — AutoRace 2026, 워크스페이스 하나 · 패키지 하나 · 명령 한 줄
 
-이 repo가 그대로 ROS 2 워크스페이스다 (`src/autorace` 패키지 하나). 원본 repo들은 건드리지 않고 아래 커밋에서 복사했다.
+## 실행 (이것부터)
+
+이 repo가 그대로 ROS 2 워크스페이스다. YOLO(`ultralytics`)는 시스템 파이썬이 아니라 **venv** 안에 있고, launch가 그 venv를 찾아서 YOLO 노드 2개만 그 파이썬으로 띄운다.
+
+### 처음 한 번
+
+```bash
+git clone https://github.com/turtlebot-autorace-2026/Y_version_2.git ~/Y_version_2
+cd ~/Y_version_2
+
+# 1. venv: 워크스페이스 루트에 만든다 (ROS와 같은 시스템 python3 기반이어야 rclpy가 보인다)
+python3 -m venv --system-site-packages .venv
+touch .venv/COLCON_IGNORE                      # colcon이 venv를 패키지로 착각하지 않게
+source .venv/bin/activate
+pip install ultralytics==8.4.192               # 모델을 학습한 버전과 같게 (다른 버전은 .pt 로드 실패 가능)
+deactivate
+# 이미 venv가 있으면 (예: 예전 src/autorace/.venv) 그대로 둬도 된다. launch가 찾는다 (아래 순서).
+
+# 2. 빌드
+source /opt/ros/galactic/setup.bash            # Gazebo PC가 Humble이면 humble
+colcon build --symlink-install
+source install/setup.bash                      # ~/.bashrc 에 넣어 두면 편함
+```
+
+Jetson이면 `pip install ultralytics` 전에 JetPack용 torch/torchvision을 먼저 넣고, ultralytics가 그걸 CPU torch로 덮어쓰지 않게 `pip install --no-deps ultralytics==8.4.192` 뒤 나머지 의존성만 따로 넣는다.
+
+### 매번
+
+```bash
+cd ~/Y_version_2
+source /opt/ros/galactic/setup.bash && source install/setup.bash
+ros2 launch autorace robot.launch.py            # 실차 (로봇에서)
+ros2 launch autorace sim.launch.py              # Gazebo (hakee의 autorace_gazebo도 source돼 있어야 함)
+```
+
+`source .venv/bin/activate`는 **해도 되고 안 해도 된다.** launch가 YOLO 노드의 파이썬을 이 순서로 고른다:
+
+1. 지금 셸에 활성화된 venv (`$VIRTUAL_ENV`) — `source .venv/bin/activate`를 했으면 이것
+2. `~/Y_version_2/.venv`
+3. `~/Y_version_2/src/autorace/.venv`
+4. `~/autorace/yolo_venv` (선배 위치)
+5. 없으면 시스템 `python3` → 시작 로그에 **WARNING: no venv with ultralytics found**가 뜨고 YOLO 노드 2개가 `import ultralytics`에서 죽는다. 다른 노드는 뜬다.
+
+다른 위치는 `python:=/경로/.venv/bin/python`. 시작 로그 첫 줄 `yolo python=...`에서 어느 파이썬이 잡혔는지 확인한다.
+
+### 자주 쓰는 인자
+
+| 인자 | 기본 | 뜻 |
+| --- | --- | --- |
+| `start_mode:=go` | `light` | 신호등 안 기다리고 바로 출발 (연습용) |
+| `v_max:=0.12` | `0.18` | 직선 최고 속도 m/s |
+| `show:=true` | robot `false` / sim `true` | OpenCV 디버그 창 (디스플레이 필요) |
+| `gui:=false` | `true` | (sim) Gazebo 창 없이 물리만 |
+| `intersection_on_turn_sign:=true` | `false` | (robot) 삼각 표지판 없는 연습 맵에서 좌/우 화살표만으로 교차로 시작. **대회장에선 절대 켜지 말 것** (주차장 좌회전 표지판이 교차로를 시작시킴) |
+| `python:=...` | 자동 | YOLO용 파이썬 직접 지정 |
+
+### Gazebo 기록
+
+```bash
+ros2 launch autorace sim.launch.py gui:=false show:=false                               # 터미널 A
+ros2 bag record /mission/state /lane/status /lane/centre /odom /scan /cmd_vel /cmd_vel_lane /cmd_vel_mission /mission/drive -o run1   # 터미널 B (출발 전에)
+ros2 topic echo /mission/state                                                           # 터미널 C
+```
+
+### 안 될 때
+
+| 증상 | 조치 |
+| --- | --- |
+| `ModuleNotFoundError: ultralytics` | venv를 못 찾은 것. 시작 로그의 `yolo python=`을 보고 위 순서대로 위치 확인, 또는 `python:=` |
+| `No module named 'rclpy'` (YOLO 노드만) | venv를 `--system-site-packages` 없이 만들었다. 지우고 다시 |
+| colcon이 `.venv` 안에서 패키지를 찾으려 함 | `touch .venv/COLCON_IGNORE` |
+| `gazebo:=true but autorace_gazebo is not installed` | hakee의 Gazebo 워크스페이스 `install/setup.bash`를 source 안 함 |
+| 로봇이 영영 안 출발 | 신호등 대기. `/camera2`가 나오는지, `/mission/debug/compressed`에서 초록이 잡히는지. 연습이면 `start_mode:=go` |
+| 카메라가 서로 바뀜 | `config/camera_params.yaml`을 by-path 이름으로 (아래 "카메라 두 대 지정") |
+
+---
+
+## 코드 구성
+
+원본 repo들은 건드리지 않고 아래 커밋에서 복사했다.
 
 | 원본 (읽기만 함) | 커밋 | 여기로 온 것 |
 | --- | --- | --- |
@@ -14,19 +93,6 @@
 - 카메라를 번호 대신 고정 장치 이름으로 연다 (아래 "카메라 두 대 지정").
 - 교차로 출구를 헤딩으로 판정한다 (아래 "교차로 미션이 하는 일").
 - 터널: LiDAR로 지도를 쌓으며 출구까지 경로 계획, 기본으로 켜짐 (아래 "터널 미션이 하는 일").
-
-## 설치 (처음 한 번)
-
-```bash
-git clone https://github.com/turtlebot-autorace-2026/Y_version_2.git ~/Y_version_2
-cd ~/Y_version_2
-source /opt/ros/galactic/setup.bash
-colcon build --symlink-install
-source ~/Y_version_2/install/setup.bash        # ~/.bashrc 에 넣어 두면 편함
-```
-
-- `ultralytics`(YOLO)가 필요하다. 선배처럼 `~/autorace/yolo_venv`에 깔려 있으면 YOLO 노드 2개를 자동으로 그 파이썬으로 돌린다. 없으면 시스템 `python3`를 쓴다. 다른 위치는 `python:=/경로/python`.
-- 패키지 이름은 `autorace` 하나뿐이다. 다른 워크스페이스(`camera_ros`, `lane_detection_ad` 등)를 같이 source해도 이름이 안 겹친다.
 
 ## 실차 — 로봇에서 한 줄
 

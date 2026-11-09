@@ -14,7 +14,7 @@ light cannot be seen: the FSM then starts by itself after traffic_light.no_camer
 """
 import os
 
-from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -22,13 +22,35 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 PKG = 'autorace'
-VENV_PYTHON = os.path.expanduser('~/autorace/yolo_venv/bin/python')
+
+
+def find_venv_python():
+    '''Python with ultralytics for the two YOLO nodes. Order:
+      1. the venv that is active in this shell ($VIRTUAL_ENV, i.e. `source .venv/bin/activate` was run)
+      2. <workspace>/.venv             (workspace = two levels above this package's install prefix)
+      3. <workspace>/src/autorace/.venv
+      4. ~/autorace/yolo_venv          (the senior's location)
+    '' = none found: the nodes run with the system python3 and fail at `import ultralytics`.'''
+    candidates = []
+    if os.environ.get('VIRTUAL_ENV'):
+        candidates.append(os.path.join(os.environ['VIRTUAL_ENV'], 'bin', 'python'))
+    try:
+        ws = os.path.abspath(os.path.join(get_package_prefix(PKG), '..', '..'))
+        candidates += [os.path.join(ws, '.venv', 'bin', 'python'),
+                       os.path.join(ws, 'src', 'autorace', '.venv', 'bin', 'python')]
+    except PackageNotFoundError:
+        pass
+    candidates.append(os.path.expanduser('~/autorace/yolo_venv/bin/python'))
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return ''
 
 
 def _setup(context):
     share = get_package_share_directory(PKG)
     arg = lambda n: LaunchConfiguration(n).perform(context)  # noqa: E731
-    python = arg('python').strip() or (VENV_PYTHON if os.path.exists(VENV_PYTHON) else '')
+    python = arg('python').strip() or find_venv_python()
     prefix = {'prefix': python} if python else {}
     lane_params = arg('lane_params') or os.path.join(share, 'config', 'lane_params.yaml')
     mission_params = arg('mission_params') or os.path.join(share, 'config', 'mission_params.yaml')
@@ -46,6 +68,9 @@ def _setup(context):
 
     actions = [LogInfo(msg='[autorace sim] gazebo=%s yolo python=%s start_mode=%s'
                        % (start_gazebo, python or 'python3 (script default)', arg('start_mode')))]
+    if not python:
+        actions.append(LogInfo(msg='[autorace sim] WARNING: no venv with ultralytics found (.venv in the workspace, '
+                                   'or source .venv/bin/activate first). The YOLO nodes will fail to import.'))
     if start_gazebo:
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(gz_share, 'launch', 'autorace.launch.py')),
