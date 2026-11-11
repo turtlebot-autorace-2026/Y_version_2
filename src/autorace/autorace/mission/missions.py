@@ -374,6 +374,14 @@ class Parking(Mission):
         'anchor_max_dev_deg': 15.0, # lane heading further than this from the sign-based one: ignored
         'park_wait_s': 1.5,
         'scan_wait_s': 0.6,
+        'probe_m': 0.07,            # both stalls looked free from the corridor: creep this far toward the chosen
+                                    # one (body front reaches the stall line, not over it) and look ahead.
+                                    # The team sees the house robot on the LiDAR only within ~0.20 m; from the
+                                    # corridor centre it is 0.21-0.22 m away, after the creep ~0.18 m. 0 = off
+        'probe_v': 0.03,
+        'probe_box_x': 0.25,        # m ahead of the axle: points in this box = the stall is occupied
+        'probe_half_width': 0.10,
+        'probe_points': 3,
         'exit_turn_deg': 60.0,      # left turn back onto the road
         'exit_lane_m': 0.25,
         'v': 0.06,
@@ -383,6 +391,7 @@ class Parking(Mission):
     def start(self, ctx):
         Mission.start(self, ctx)
         self.side, self.ranges = None, None
+        self.need_probe, self.probed, self.probe_heading, self.probe_back_m = False, False, None, 0.0
         # corridor heading from the (straight) road heading at the sign, not from the yaw after lane
         # following in the spur, which may still be swinging
         self.yaw_ref = wrap(ctx.yaw + math.radians(self.p['spur_angle_deg']))
@@ -444,15 +453,43 @@ class Parking(Mission):
             else:
                 self.side = 'left' if left > right else 'right'
             self.sgn = 1.0 if self.side == 'left' else -1.0
-            self.log.append('parking: left %.2f m right %.2f m -> %s' % (left, right, self.side))
+            # nothing seen on either side: may just be out of the LiDAR's reach -> check at the stall entrance
+            self.need_probe = not occ_l and not occ_r and p['probe_m'] > 0
+            self.log.append('parking: left %.2f m right %.2f m -> %s%s' % (
+                left, right, self.side, ' (probe at the entrance)' if self.need_probe else ''))
             self._enter('turn_in', ctx)
         if self.phase == 'turn_in':
             cmd, fin = turn_cmd(ctx.yaw, self.yaw_ref + self.sgn * math.pi / 2)
             if not fin:
                 return Outputs(drive='mission', cmd=cmd)
-            self._enter('in', ctx)
+            self._enter('probe' if self.need_probe else 'in', ctx)
+        if self.phase == 'probe':
+            heading = self.yaw_ref + self.sgn * math.pi / 2
+            hw = p['probe_half_width']
+            hits = ctx.scan.count_box(0.05, p['probe_box_x'], -hw, hw) if ctx.scan is not None else 0
+            if hits >= p['probe_points']:
+                other = 'right' if self.side == 'left' else 'left'
+                self.log.append('parking: %s stall occupied (%d points ahead after %.2f m) -> %s'
+                                % (self.side, hits, self._dist(ctx), other))
+                self.probe_heading, self.probe_back_m = heading, self._dist(ctx)
+                self.side, self.sgn, self.need_probe = other, -self.sgn, False
+                self._enter('probe_back', ctx)
+            else:
+                cmd, fin = drive_cmd(self._dist(ctx), p['probe_m'], ctx.yaw, heading, p['probe_v'])
+                if not fin:
+                    return Outputs(drive='mission', cmd=cmd)
+                self.log.append('parking: %s stall free at the entrance' % self.side)
+                self.probed = True
+                self._enter('in', ctx)
+        if self.phase == 'probe_back':
+            cmd, fin = drive_cmd(self._dist(ctx), -self.probe_back_m, ctx.yaw, self.probe_heading, p['probe_v'])
+            if not fin:
+                return Outputs(drive='mission', cmd=cmd)
+            self._enter('turn_in', ctx)                 # 180 deg to the other stall, then straight in
+            return Outputs(drive='mission')
         if self.phase == 'in':
-            cmd, fin = drive_cmd(self._dist(ctx), p['bay_drive_m'], ctx.yaw, self.yaw_ref + self.sgn * math.pi / 2, p['v'])
+            todo = p['bay_drive_m'] - (p['probe_m'] if self.probed else 0.0)
+            cmd, fin = drive_cmd(self._dist(ctx), todo, ctx.yaw, self.yaw_ref + self.sgn * math.pi / 2, p['v'])
             if not fin:
                 return Outputs(drive='mission', cmd=cmd)
             self._enter('parked', ctx)

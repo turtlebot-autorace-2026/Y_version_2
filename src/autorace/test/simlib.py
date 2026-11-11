@@ -105,12 +105,13 @@ class Robot(object):
     The mission sees the odometry pose; the LiDAR, the lane stand-in and the clearance use the true pose.'''
 
     def __init__(self, world, pose, dt=0.1, odom_v=0.0, odom_w=0.0, scan_hz=None, smear=False, noise=0.0,
-                 noise_rel=0.0, seed=0, n=360, lidar_x=-0.032):
+                 noise_rel=0.0, seed=0, n=360, lidar_x=-0.032, lidar_max=3.5):
         self.world, self.dt = world, dt
         self.true, self.odom = list(pose), list(pose)
         self.odom_v, self.odom_w = odom_v, odom_w
         self.scan_hz, self.smear, self.noise, self.noise_rel = scan_hz, smear, noise, noise_rel
-        self.real_scan = bool(scan_hz or smear or noise or noise_rel)
+        self.lidar_max = lidar_max          # effective range: a dark object only returns up close
+        self.real_scan = bool(scan_hz or smear or noise or noise_rel or lidar_max < 3.5)
         self.rng = np.random.default_rng(seed)
         self.n, self.lidar_x = n, lidar_x
         self.t, self.travel = 0.0, 0.0
@@ -150,7 +151,7 @@ class Robot(object):
         else:
             P = np.tile(np.array(self.true), (n, 1))
         r = cast(self.world, P[:, 0] + self.lidar_x * np.cos(P[:, 2]), P[:, 1] + self.lidar_x * np.sin(P[:, 2]),
-                 P[:, 2] + a)
+                 P[:, 2] + a, rmax=self.lidar_max)
         if self.noise or self.noise_rel:
             fin = np.isfinite(r)
             r[fin] += self.rng.normal(0.0, 1.0, int(fin.sum())) * (self.noise + self.noise_rel * r[fin])

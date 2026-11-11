@@ -312,6 +312,32 @@ def test_parking_odometry_error(house, expect, odom):
     assert pose[1] > 1.85, pose
 
 
+@pytest.mark.parametrize('house,expect', [(None, 'left'), ('left', 'right'), ('right', 'left')])
+def test_parking_lidar_sees_only_20cm(house, expect):
+    '''Team observation: the house robot shows on the LiDAR only within ~0.20 m. From the corridor
+    centre it is 0.21-0.22 m away, so both stalls look free and the default (left) was taken: with
+    the house robot on the left that entered the occupied stall. The entrance probe sees it.'''
+    m = Parking()
+    stall = []
+
+    def watch(pose, out, mission):
+        if mission.phase == 'parked':
+            stall.append(tuple(pose))
+    centre = lane_centre_of(parking_lane_path, m, np.random.default_rng(7))
+    pose, trace, clear = run(m, parking_world(house), (1.5, LOT['road_y'], math.pi), parking_lane_path,
+                             on_step=watch, lane_centre=centre, real=dict(scan_hz=5.0, lidar_max=0.20))
+    assert m.done and m.result == 'ok' and m.side == expect, (m.side, m.log)
+    if house:
+        assert clear.min() > 0.0, clear.min()
+    sx, sy, syaw = stall[0]
+    lo, hi = (0.722, 1.004) if expect == 'left' else (0.154, 0.436)
+    c, s = math.cos(syaw), math.sin(syaw)
+    for a in (-0.10, 0.07):
+        for b in (-0.10, 0.10):
+            px = sx + c * a - s * b
+            assert lo + 0.013 < px < hi - 0.013, (stall[0], px)
+
+
 # ---------------------------------------------------------------- construction
 # Lines measured on the course texture (scaled to v014): road heading +x, sharp yellow corner /
 # wide white arc into the double-width section (heading +y), then sharp yellow corner / wide white

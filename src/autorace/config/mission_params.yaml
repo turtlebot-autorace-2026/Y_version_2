@@ -68,6 +68,11 @@ mission_fsm:
       anchor_min: 5
       anchor_max_dev_deg: 15.0
       park_wait_s: 1.5
+      probe_m: 0.07                # both stalls look free -> creep to the chosen stall's line and look ahead (0 = off)
+      probe_v: 0.03                #   (LiDAR sees the house robot only within ~0.20 m; corridor centre is 0.21-0.22 m away)
+      probe_box_x: 0.25            #   points ahead of the axle within this -> occupied, back out, take the other stall
+      probe_half_width: 0.10
+      probe_points: 3
       scan_wait_s: 0.6
       exit_turn_deg: 60.0
       exit_lane_m: 0.25
